@@ -19,7 +19,7 @@ Job 运行时请保持 `MyBots.Selfbot.DisableRpgQuest = 1`，避免官方 RPG �
 无需 token。
 
 ```json
-{"ok":true,"service":"mod-mybots","version":"0.2.0"}
+{"ok":true,"service":"mod-mybots","version":"0.3.0"}
 ```
 
 ---
@@ -56,6 +56,61 @@ Job 运行时请保持 `MyBots.Selfbot.DisableRpgQuest = 1`，避免官方 RPG �
 ```
 
 `job` 有进行中作业时为完整 job 对象，否则为 `null`。
+
+### `GET /v1/characters/{id}/quests`（别名 `/questlog`）
+
+**在线内存任务日志**（`PLAYER_QUEST_LOG` 槽位），不是 `characters.character_queststatus` 表。角色须在线，否则 **409** `offline`。
+
+```json
+{
+  "ok": true,
+  "online": true,
+  "source": "live",
+  "guid": 521,
+  "name": "Yjx",
+  "items": [
+    {
+      "questId": 7,
+      "title": "Kobold Camp Cleanup",
+      "status": 3,
+      "status_label": "incomplete",
+      "questLevel": 1,
+      "minLevel": 1,
+      "completable": false,
+      "giverEntry": 197,
+      "turninEntry": 197,
+      "source": "live"
+    }
+  ]
+}
+```
+
+`status` 取值与核心一致：`1=complete`、`3=incomplete`、`5=failed`。
+
+### `GET /v1/characters/{id}/quests/available`
+
+附近约 80 码内 NPC 任务菜单里，当前角色**真正能接**的任务（`PrepareQuestMenu` + `CanTakeQuest`）。不是按等级扫全库的启发式列表。
+
+```json
+{
+  "ok": true,
+  "online": true,
+  "source": "nearby",
+  "range": 80,
+  "note": "nearby_questgivers",
+  "items": [
+    {
+      "questId": 33,
+      "title": "...",
+      "status": 0,
+      "status_label": "none",
+      "giverEntry": 197,
+      "heuristic": false,
+      "source": "nearby"
+    }
+  ]
+}
+```
 
 ### `POST /v1/characters/{id}/selfbot`
 

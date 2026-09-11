@@ -191,7 +191,7 @@ void HandleRequest(boost::asio::ip::tcp::socket sock)
 
         if (method == "GET" && (target == "/health" || target == "/v1/health"))
         {
-            Send(sock, 200, "{\"ok\":true,\"service\":\"mod-mybots\",\"version\":\"0.2.0\"}");
+            Send(sock, 200, "{\"ok\":true,\"service\":\"mod-mybots\",\"version\":\"0.3.0\"}");
             return;
         }
 
@@ -334,6 +334,10 @@ void HandleRequest(boost::asio::ip::tcp::socket sock)
             intent.op = MyBotsIntentOp::CancelJob;
         else if (method == "GET" && restAfterChar == "events")
             intent.op = MyBotsIntentOp::ListEvents;
+        else if (method == "GET" && (restAfterChar == "quests" || restAfterChar == "questlog"))
+            intent.op = MyBotsIntentOp::QuestLog;
+        else if (method == "GET" && restAfterChar == "quests/available")
+            intent.op = MyBotsIntentOp::QuestsAvailable;
         else
         {
             Send(sock, 404, "{\"ok\":false,\"code\":\"not_found\",\"message\":\"Unknown route\"}");

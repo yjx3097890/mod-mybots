@@ -24,6 +24,8 @@ enum class MyBotsIntentOp
     ListJobs,
     GetJob,
     ListEvents,
+    QuestLog,
+    QuestsAvailable,
     UpsertPatrol,
     ListPatrols
 };

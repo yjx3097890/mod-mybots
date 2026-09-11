@@ -3,6 +3,7 @@
 #include "MyBotsDirector.h"
 #include "MyBotsExecutor.h"
 #include "MyBotsJob.h"
+#include "MyBotsQuests.h"
 #include "MyBotsSelfbot.h"
 #include "MyBotsUtil.h"
 
@@ -281,6 +282,12 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
         }
         case MyBotsIntentOp::ListEvents:
             finish(200, "{\"ok\":true,\"events\":" + sMyBotsJobStore.EventsJson(guid) + "}");
+            return;
+        case MyBotsIntentOp::QuestLog:
+            finish(200, MyBotsQuests::BuildQuestLogJson(player));
+            return;
+        case MyBotsIntentOp::QuestsAvailable:
+            finish(200, MyBotsQuests::BuildNearbyAvailableJson(player));
             return;
         default:
             finish(404, "{\"ok\":false,\"code\":\"not_found\"}");
