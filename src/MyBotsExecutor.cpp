@@ -109,8 +109,17 @@ void IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool f
 {
     uint32 const now = MyBotsNow();
 
-    // Never aim at raw spawn/DBC Z — that is what puts Selfbots in the sky or under the floor.
-    MyBotsNav::SnapToGround(player, x, y, z);
+    // Pull the character out of the mesh if a previous bad destination sank them.
+    MyBotsNav::CorrectIfUnderground(player);
+
+    // Resolve walkable XYZ via mmap (Playerbots-style). Do NOT use Map::GetHeight
+    // from the sky — that is what snapped us onto cave floors.
+    if (!MyBotsNav::PrepareWalkTarget(player, x, y, z))
+    {
+        LOG_DEBUG("module.mybots", "MyBots: no walkable path for {} toward ({:.1f},{:.1f},{:.1f})",
+            player->GetName(), x, y, z);
+        return;
+    }
 
     bool const sameTarget = std::fabs(job.moveTargetX - x) < 1.f
         && std::fabs(job.moveTargetY - y) < 1.f
@@ -126,8 +135,8 @@ void IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool f
     job.moveTargetZ = z;
     job.moveIssuedAt = now;
 
-    // generatePath=true, forceDestination=false: if MMAP cannot reach the point,
-    // do not skate in a straight line through terrain (the float/clip symptom).
+    // Same flags Playerbots DoMovePoint uses: generatePath, never forceDestination.
+    player->GetMotionMaster()->Clear();
     player->GetMotionMaster()->MovePoint(1, x, y, z, FORCED_MOVEMENT_NONE, 0.f, 0.f, true, false);
 }
 } // namespace

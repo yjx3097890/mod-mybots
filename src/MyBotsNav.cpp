@@ -9,7 +9,9 @@
 #include "Map.h"
 #include "MotionMaster.h"
 #include "ObjectMgr.h"
+#include "PathGenerator.h"
 #include "Player.h"
+#include "SharedDefines.h"
 
 #ifdef MYBOTS_HAVE_TRAVELMGR
 // Playerbots.h first: TravelMgr.h relies on its AiObject/config headers.
@@ -135,31 +137,98 @@ MyBotsTaxiResult MyBotsNav::TryTaxi(Player* player, float x, float y, float z,
     return MyBotsTaxiResult::Boarded;
 }
 
-bool MyBotsNav::SnapToGround(Player* player, float& x, float& y, float& z)
+bool MyBotsNav::PrepareWalkTarget(Player* player, float& x, float& y, float& z)
 {
     if (!player)
         return false;
 
-    Map* map = player->GetMap();
-    if (!map)
-        return false;
+    // Mirror Playerbots MovementAction::SearchForBestPath: pick a floor near the
+    // *requested* Z (not from the sky), then keep the shortest mmap-valid path.
+    float const reqX = x;
+    float const reqY = y;
+    float const reqZ = z;
 
-    uint32 const phase = player->GetPhaseMask();
-    float const hintZ = std::max(z, player->GetPositionZ()) + 5.f;
+    int const typeOk = PATHFIND_NORMAL | PATHFIND_INCOMPLETE;
+    float bestLen = 0.f;
+    float bestX = reqX;
+    float bestY = reqY;
+    float bestZ = INVALID_HEIGHT;
+    bool found = false;
 
-    float ground = map->GetHeight(phase, x, y, hintZ, true, 100.f);
-    if (ground < -50000.f)
-        ground = map->GetHeight(phase, x, y, 2000.f, true, 2500.f);
-    if (ground < -50000.f)
-        return false;
+    auto tryZ = [&](float candidateZ)
+    {
+        if (candidateZ <= INVALID_HEIGHT)
+            return;
 
-    // Reject absurd vertical jumps that usually mean the wrong height layer.
-    if (std::fabs(ground - player->GetPositionZ()) > 60.f
-        && std::fabs(ground - z) > 60.f)
-        return false;
+        PathGenerator gen(player);
+        if (!gen.CalculatePath(reqX, reqY, candidateZ, /*forceDest=*/false))
+            return;
+        if (!(gen.GetPathType() & typeOk))
+            return;
 
-    z = ground;
+        float const len = gen.getPathLength();
+        if (!found || len < bestLen)
+        {
+            found = true;
+            bestLen = len;
+            G3D::Vector3 const& end = gen.GetActualEndPosition();
+            bestX = end.x;
+            bestY = end.y;
+            bestZ = end.z;
+        }
+    };
+
+    tryZ(player->GetMapHeight(reqX, reqY, reqZ));
+
+    // Probe a few meters above/below the requested Z — same idea as playerbots.
+    static float const kStep = 2.f;
+    for (int i = 1; i <= 6; ++i)
+        tryZ(player->GetMapHeight(reqX, reqY, reqZ + kStep * float(i)));
+    for (int i = 1; i <= 6; ++i)
+        tryZ(player->GetMapHeight(reqX, reqY, reqZ - kStep * float(i)));
+
+    if (!found)
+    {
+        // Last resort: Unit helper that respects collision height, still near z.
+        float fallback = reqZ;
+        player->UpdateAllowedPositionZ(reqX, reqY, fallback);
+        if (fallback <= INVALID_HEIGHT)
+            return false;
+        x = reqX;
+        y = reqY;
+        z = fallback;
+        return true;
+    }
+
+    x = bestX;
+    y = bestY;
+    z = bestZ;
     return true;
+}
+
+void MyBotsNav::CorrectIfUnderground(Player* player)
+{
+    if (!player || !player->IsInWorld() || player->IsInFlight() || player->IsFlying())
+        return;
+
+    float const x = player->GetPositionX();
+    float const y = player->GetPositionY();
+    float const z = player->GetPositionZ();
+    float ground = player->GetMapHeight(x, y, z + 5.f);
+    if (ground <= INVALID_HEIGHT)
+        ground = player->GetMapHeight(x, y, z);
+    if (ground <= INVALID_HEIGHT)
+        return;
+
+    // Already under the walkable mesh by a noticeable amount.
+    if (z + 1.5f >= ground)
+        return;
+
+    player->UpdateGroundPositionZ(x, y, ground);
+    // UpdatePosition notifies the client; Relocate alone leaves them visually sunk.
+    player->UpdatePosition(x, y, ground + 0.05f, player->GetOrientation(), true);
+    LOG_DEBUG("module.mybots", "MyBots: lifted {} from underground ({:.1f} -> {:.1f})",
+        player->GetName(), z, ground);
 }
 
 bool MyBotsNav::ComputeDetour(Player* player, float destX, float destY, float destZ, uint32 attempt,
@@ -182,7 +251,7 @@ bool MyBotsNav::ComputeDetour(Player* player, float destX, float destY, float de
         float cy = player->GetPositionY() + std::sin(angle) * radius;
         float cz = player->GetPositionZ();
 
-        if (!SnapToGround(player, cx, cy, cz))
+        if (!PrepareWalkTarget(player, cx, cy, cz))
             continue;
 
         if (std::fabs(cz - player->GetPositionZ()) > 12.f)

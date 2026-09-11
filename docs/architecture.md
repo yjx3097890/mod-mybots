@@ -223,7 +223,7 @@ HTN 原语（Executor 只认这些）：
 
 ### 6.1.1 当前落地（`MyBotsNav` + `MyBotsExecutor::MoveTo`）
 
-- 跟随交给 `MotionMaster::MovePoint`（内部走 MMAP），只在目标变化、移动生成器掉出、或超过 `MyBots.Nav.RepathSec` 时才重下指令。
+- 跟随交给 `MotionMaster::MovePoint`（内部走 MMAP），目标高度先经 `PathGenerator` + `GetMapHeight`（与 Playerbots `SearchForBestPath` 同思路）解析；**禁止**从高空 `GetHeight` 贴地（会贴到洞穴层导致钻地）。`forceDestination=false`，走不通不强冲。已钻地时 `CorrectIfUnderground` 拉回地面。
 - 远路只做了 Taxi 一层：直线距离超过 `MyBots.Nav.TaxiMinDistance` 时，找出发/落地两个 taxi 节点，先走到出发节点再 `ActivateTaxiPathTo`。落地节点必须比自己明显更接近目标（< 60%）才值得飞。传送门与船暂未做，跨地图请拆作业。
 - 卡住后依次：记坏点 → 侧面偏移点（左右扇形，每轮扩大半径，校验地面高度、坏点、LOS）→ 重试次数用尽才 `stuck` 失败。
 - 坏点是本模块自己的带 TTL 列表；同时**只读**查询 Playerbots `TravelMgr::isBadMmap`（导航网格加载失败的格子），不回写。

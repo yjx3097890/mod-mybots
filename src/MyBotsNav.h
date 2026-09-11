@@ -26,9 +26,14 @@ public:
     static MyBotsTaxiResult TryTaxi(Player* player, float x, float y, float z,
         float& boardX, float& boardY, float& boardZ, std::string& detail);
 
-    // Project a destination onto walkable ground so MovePoint does not aim at
-    // floating spawn Z / DBC taxi Z / bad detour heights.
-    static bool SnapToGround(Player* player, float& x, float& y, float& z);
+    // Resolve a walkable destination the same way Playerbots does: GetMapHeight
+    // near the requested Z + PathGenerator. Never search from the sky — that
+    // snaps onto cave floors and sinks the character.
+    static bool PrepareWalkTarget(Player* player, float& x, float& y, float& z);
+
+    // If a previous bad move already put the character under the mesh, yank
+    // them back onto the floor under their feet before issuing another move.
+    static void CorrectIfUnderground(Player* player);
 
     // Side offset used when the straight line keeps failing.
     static bool ComputeDetour(Player* player, float destX, float destY, float destZ, uint32 attempt,
