@@ -218,6 +218,7 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
                 }
                 job->status = MyBotsJobStatus::Cancelled;
                 job->error = "cancelled";
+                MyBotsExecutor::HaltControl(player, job.get());
                 sMyBotsJobStore.Save(*job);
                 sMyBotsJobStore.AppendEvent(guid, job->id, "job_cancelled", "api");
                 finish(200, "{\"ok\":true,\"job\":" + MyBotsDirector::JobToJson(*job) + "}");
@@ -236,6 +237,7 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
                 return;
             }
             job->status = MyBotsJobStatus::Paused;
+            MyBotsExecutor::HaltControl(player, job.get());
             sMyBotsJobStore.Save(*job);
             finish(200, "{\"ok\":true,\"job\":" + MyBotsDirector::JobToJson(*job) + "}");
             return;

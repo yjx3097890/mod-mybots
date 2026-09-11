@@ -36,6 +36,8 @@ public:
     static MyBotsStepOutcome WaitUntil(Player* player, MyBotsJob& job, uint32 seconds);
     static MyBotsStepOutcome UntilQuestComplete(Player* player, MyBotsJob& job, uint32 questId, std::string const& detail);
     static void ClearQuestCombat(Player* player, MyBotsJob& job);
+    // Stop MovePoint / combat / grind left over from a job or Selfbot session.
+    static void HaltControl(Player* player, MyBotsJob* job = nullptr);
     static MyBotsStepOutcome Revive(Player* player);
     static MyBotsStepOutcome EnsureSelfbot(Player* player);
 

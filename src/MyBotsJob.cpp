@@ -1,9 +1,13 @@
 #include "MyBotsJob.h"
 #include "MyBotsDirector.h"
+#include "MyBotsExecutor.h"
 #include "MyBotsUtil.h"
 
 #include "DatabaseEnv.h"
 #include "Log.h"
+#include "ObjectAccessor.h"
+#include "ObjectGuid.h"
+#include "Player.h"
 #include "QueryResult.h"
 
 #include <sstream>
@@ -127,6 +131,10 @@ void MyBotsJobStore::CancelActive(uint32 charGuid, std::string const& reason)
         return;
     job->status = MyBotsJobStatus::Cancelled;
     job->error = reason;
+
+    if (Player* player = ObjectAccessor::FindPlayer(ObjectGuid(HighGuid::Player, charGuid)))
+        MyBotsExecutor::HaltControl(player, job.get());
+
     Save(*job);
     AppendEvent(charGuid, job->id, "job_cancelled", reason);
 }

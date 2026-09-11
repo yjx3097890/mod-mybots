@@ -1,6 +1,7 @@
 #include "MyBotsSelfbot.h"
 #include "MyBotsConfig.h"
 #include "MyBotsDirector.h"
+#include "MyBotsExecutor.h"
 #include "MyBotsJob.h"
 #include "MyBotsUtil.h"
 
@@ -102,15 +103,29 @@ MyBotsResult MyBotsSelfbot::Disable(Player* player)
     if (!player)
         return Fail(404, "not_found", "Character not found");
 
+    // Cancel any directed job and freeze motion before tearing down the AI —
+    // otherwise MovePoint keeps skating after Selfbot is "off".
+    uint32 const guid = player->GetGUID().GetCounter();
+    if (auto job = sMyBotsJobStore.GetActiveForChar(guid))
+    {
+        job->status = MyBotsJobStatus::Cancelled;
+        job->error = "selfbot_off";
+        MyBotsExecutor::HaltControl(player, job.get());
+        sMyBotsJobStore.Save(*job);
+        sMyBotsJobStore.AppendEvent(guid, job->id, "job_cancelled", "selfbot_off");
+    }
+    else
+        MyBotsExecutor::HaltControl(player, nullptr);
+
     PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
     if (!ai)
         return Ok("already_off", "Selfbot already disabled");
 
-    ObjectGuid guid = player->GetGUID();
+    ObjectGuid playerGuid = player->GetGUID();
     delete ai;
-    PlayerbotsMgr::instance().RemovePlayerBotData(guid, true);
+    PlayerbotsMgr::instance().RemovePlayerBotData(playerGuid, true);
 
-    LOG_INFO("module.mybots", "Selfbot disabled for {} guid={}", player->GetName(), guid.GetCounter());
+    LOG_INFO("module.mybots", "Selfbot disabled for {} guid={}", player->GetName(), playerGuid.GetCounter());
     return Ok("disabled", "Selfbot disabled");
 }
 

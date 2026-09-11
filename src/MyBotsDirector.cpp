@@ -401,6 +401,7 @@ void MyBotsDirector::TickJob(MyBotsJob& job)
         else
         {
             job.status = MyBotsJobStatus::Succeeded;
+            MyBotsExecutor::HaltControl(player, &job);
             sMyBotsJobStore.Save(job);
             sMyBotsJobStore.AppendEvent(job.charGuid, job.id, "job_succeeded", "done");
             return;
@@ -441,7 +442,7 @@ void MyBotsDirector::TickJob(MyBotsJob& job)
         step.status = MyBotsJobStatus::Failed;
         job.status = MyBotsJobStatus::Failed;
         job.error = outcome.detail;
-        MyBotsExecutor::ClearQuestCombat(player, job);
+        MyBotsExecutor::HaltControl(player, &job);
         sMyBotsJobStore.Save(job);
         sMyBotsJobStore.AppendEvent(job.charGuid, job.id, "job_failed", outcome.detail);
     }

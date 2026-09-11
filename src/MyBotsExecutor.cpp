@@ -544,6 +544,36 @@ void MyBotsExecutor::ClearQuestCombat(Player* player, MyBotsJob& job)
     job.questHuntEntry = 0;
 }
 
+void MyBotsExecutor::HaltControl(Player* player, MyBotsJob* job)
+{
+    if (job)
+        ClearQuestCombat(player, *job);
+
+    if (!player)
+        return;
+
+    player->AttackStop();
+    player->StopMoving();
+    if (MotionMaster* mm = player->GetMotionMaster())
+    {
+        mm->Clear();
+        mm->MoveIdle();
+    }
+
+    if (job)
+    {
+        job->stuckSince = 0;
+        job->waitUntil = 0;
+        job->navAttempts = 0;
+        job->detourUntil = 0;
+        job->moveIssuedAt = 0;
+        job->taxiRetryAt = 0;
+        job->taxiInProgress = false;
+        job->navSpawnEntry = 0;
+        job->questHuntEntry = 0;
+    }
+}
+
 MyBotsStepOutcome MyBotsExecutor::UntilQuestComplete(Player* player, MyBotsJob& job, uint32 questId,
     std::string const& detail)
 {
