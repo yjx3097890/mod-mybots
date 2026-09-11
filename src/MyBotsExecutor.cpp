@@ -101,6 +101,8 @@ void ResetNavState(MyBotsJob& job)
     job.detourUntil = 0;
     job.moveIssuedAt = 0;
     job.taxiInProgress = false;
+    job.taxiSawFlight = false;
+    job.taxiBoardedAt = 0;
 }
 
 // Clearing the motion master every tick restarts pathfinding and makes the
@@ -109,6 +111,11 @@ void ResetNavState(MyBotsJob& job)
 void IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool force)
 {
     uint32 const now = MyBotsNow();
+
+    // Never interrupt an active taxi spline — Clear() here is what caused the
+    // Goldshire board→drop→board loop.
+    if (player->IsInFlight() || player->HasUnitFlag(UNIT_FLAG_TAXI_FLIGHT))
+        return;
 
     // Pull the character out of the mesh if a previous bad destination sank them.
     MyBotsNav::CorrectIfUnderground(player);
@@ -228,10 +235,11 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
     uint32 const now = MyBotsNow();
 
     // A taxi flight owns movement until the character lands.
-    if (player->IsInFlight())
+    if (player->IsInFlight() || player->HasUnitFlag(UNIT_FLAG_TAXI_FLIGHT))
     {
         job.stuckSince = 0;
         job.taxiInProgress = true;
+        job.taxiSawFlight = true;
         o.result = MyBotsStepResult::Running;
         o.detail = "in_flight";
         return o;
@@ -239,9 +247,21 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
 
     if (job.taxiInProgress)
     {
+        // ActivateTaxiPathTo sets the flag a tick or two later. Treating that
+        // gap as "landed" made us Clear() the spline and re-board forever.
+        if (!job.taxiSawFlight && job.taxiBoardedAt && now - job.taxiBoardedAt < 5)
+        {
+            o.result = MyBotsStepResult::Running;
+            o.detail = "taxi_pending";
+            return o;
+        }
         job.taxiInProgress = false;
+        job.taxiSawFlight = false;
+        job.taxiBoardedAt = 0;
         job.stuckSince = 0;
         job.moveIssuedAt = 0;
+        // Cool down so we do not immediately hop the same Goldshire bird again.
+        job.taxiRetryAt = now + sMyBotsConfig.NavTaxiRetrySec();
     }
 
     if (player->GetDistance(x, y, z) <= dist)
@@ -344,6 +364,8 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
         {
             case MyBotsTaxiResult::Boarded:
                 job.taxiInProgress = true;
+                job.taxiSawFlight = false;
+                job.taxiBoardedAt = now;
                 job.moveIssuedAt = 0;
                 o.result = MyBotsStepResult::Running;
                 o.detail = taxiDetail;
@@ -578,6 +600,8 @@ void MyBotsExecutor::HaltControl(Player* player, MyBotsJob* job)
         job->moveIssuedAt = 0;
         job->taxiRetryAt = 0;
         job->taxiInProgress = false;
+        job->taxiSawFlight = false;
+        job->taxiBoardedAt = 0;
         job->navSpawnEntry = 0;
         job->questHuntEntry = 0;
     }

@@ -96,12 +96,13 @@ MyBots.Director.TickMs = 1000
 ###################################################################################################
 
 # Use flight paths for long trips instead of walking the whole way.
-# Boarding does not require the flight point to be learned, but the taxi fare
-# is still deducted, so a broke character just walks.
-# 远距离优先坐飞行点，而不是全程步行。
-# 上机不要求已学会该飞行点，但仍会扣飞行费；没钱就退回步行。
-# Default / 默认: 1
-MyBots.Nav.UseTaxi = 1
+# OFF by default: early builds boarded via ActivateTaxiPathTo(nullptr) which
+# starts a flight from mid-map (not at a flight master) and could Clear() the
+# spline mid-air, looping Goldshire board→drop→board.
+# 默认关闭。以前用脚本接口会在非飞行点突然上天，并在起飞瞬间清 MotionMaster
+# 造成闪金镇登机死循环。需要时再开，且只会通过真正的飞行管理员上车。
+# Default / 默认: 0
+MyBots.Nav.UseTaxi = 0
 
 # Minimum straight-line distance (yards) before a flight path is considered
 # 触发飞行点的最小直线距离（码）

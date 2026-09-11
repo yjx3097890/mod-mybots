@@ -90,6 +90,8 @@ struct MyBotsJob
     float detourZ = 0.f;
     uint32 taxiRetryAt = 0;
     bool taxiInProgress = false;
+    bool taxiSawFlight = false;
+    uint32 taxiBoardedAt = 0;
     // Cached spawn position for move_to by creature entry.
     uint32 navSpawnEntry = 0;
     float navSpawnX = 0.f;

@@ -24,7 +24,7 @@ void MyBotsConfig::Load(bool reload)
     _jobReplace = sConfigMgr->GetOption<bool>("MyBots.Job.Replace", true);
     _stuckTimeoutSec = sConfigMgr->GetOption<uint32>("MyBots.Executor.StuckTimeoutSec", 45);
     _directorTickMs = sConfigMgr->GetOption<uint32>("MyBots.Director.TickMs", 1000);
-    _navUseTaxi = sConfigMgr->GetOption<bool>("MyBots.Nav.UseTaxi", true);
+    _navUseTaxi = sConfigMgr->GetOption<bool>("MyBots.Nav.UseTaxi", false);
     _navTaxiMinDistance = sConfigMgr->GetOption<float>("MyBots.Nav.TaxiMinDistance", 600.f);
     _navTaxiBoardDistance = sConfigMgr->GetOption<float>("MyBots.Nav.TaxiBoardDistance", 12.f);
     _navTaxiRetrySec = sConfigMgr->GetOption<uint32>("MyBots.Nav.TaxiRetrySec", 120);

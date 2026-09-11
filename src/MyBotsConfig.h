@@ -58,7 +58,7 @@ private:
     bool _jobReplace = true;
     uint32 _stuckTimeoutSec = 45;
     uint32 _directorTickMs = 1000;
-    bool _navUseTaxi = true;
+    bool _navUseTaxi = false;
     float _navTaxiMinDistance = 600.f;
     float _navTaxiBoardDistance = 12.f;
     uint32 _navTaxiRetrySec = 120;

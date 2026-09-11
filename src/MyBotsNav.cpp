@@ -3,6 +3,7 @@
 #include "MyBotsConfig.h"
 #include "MyBotsUtil.h"
 
+#include "Creature.h"
 #include "DBCStores.h"
 #include "GridDefines.h"
 #include "Log.h"
@@ -56,6 +57,27 @@ namespace
         float const dx = ax - bx;
         float const dy = ay - by;
         return std::sqrt(dx * dx + dy * dy);
+    }
+
+    Creature* FindNearbyFlightMaster(Player* player, float range)
+    {
+        if (!player)
+            return nullptr;
+
+#ifdef MYBOTS_HAVE_TRAVELMGR
+        if (TravelMgr::FlightMasterInfo const* info = sTravelMgr.GetNearestFlightMasterInfo(player))
+        {
+            if (player->GetDistance(info->pos) <= range)
+                if (Creature* c = player->FindNearestCreature(info->templateEntry, range, true))
+                    if (c->HasNpcFlag(UNIT_NPC_FLAG_FLIGHTMASTER))
+                        return c;
+        }
+#endif
+        // Fallback: scan a few common distances with any creature that has the flag.
+        // WorldObject has no generic "all creatures in range" helper without an entry,
+        // so without TravelMgr we refuse to board (approach-only still works).
+        (void)range;
+        return nullptr;
     }
 }
 
@@ -121,12 +143,22 @@ MyBotsTaxiResult MyBotsNav::TryTaxi(Player* player, float x, float y, float z,
         return MyBotsTaxiResult::Approaching;
     }
 
+    // ActivateTaxiPathTo(nullptr) is a script cheat that starts a flight from
+    // anywhere near the node coords — that is the "suddenly on a gryphon in
+    // the middle of Goldshire" bug. Only board through a real flight master.
+    Creature* flightMaster = FindNearbyFlightMaster(player, sMyBotsConfig.NavTaxiBoardDistance() + 5.f);
+    if (!flightMaster)
+    {
+        detail = "taxi_no_flightmaster";
+        return MyBotsTaxiResult::Unavailable;
+    }
+
     std::vector<uint32> nodes;
     nodes.push_back(srcNode);
     nodes.push_back(dstNode);
 
     player->GetMotionMaster()->Clear();
-    if (!player->ActivateTaxiPathTo(nodes, nullptr, 1))
+    if (!player->ActivateTaxiPathTo(nodes, flightMaster, 0))
     {
         detail = "taxi_refused";
         return MyBotsTaxiResult::Unavailable;
