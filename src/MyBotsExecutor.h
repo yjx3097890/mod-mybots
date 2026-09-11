@@ -34,7 +34,8 @@ public:
     static MyBotsStepOutcome AcceptQuest(Player* player, uint32 questId, uint32 giverEntry = 0);
     static MyBotsStepOutcome TurnInQuest(Player* player, uint32 questId, uint32 giverEntry = 0);
     static MyBotsStepOutcome WaitUntil(Player* player, MyBotsJob& job, uint32 seconds);
-    static MyBotsStepOutcome UntilQuestComplete(Player* player, uint32 questId);
+    static MyBotsStepOutcome UntilQuestComplete(Player* player, MyBotsJob& job, uint32 questId, std::string const& detail);
+    static void ClearQuestCombat(Player* player, MyBotsJob& job);
     static MyBotsStepOutcome Revive(Player* player);
     static MyBotsStepOutcome EnsureSelfbot(Player* player);
 

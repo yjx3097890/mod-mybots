@@ -2,6 +2,7 @@
 #include "MyBotsConfig.h"
 #include "MyBotsJob.h"
 #include "MyBotsNav.h"
+#include "MyBotsQuestPlan.h"
 #include "MyBotsSelfbot.h"
 #include "MyBotsUtil.h"
 
@@ -15,6 +16,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <vector>
 
 namespace
 {
@@ -56,6 +58,39 @@ bool FindNearestSpawnPoint(Player* player, uint32 entry, float& x, float& y, flo
     }
 
     return best >= 0.f;
+}
+
+bool ParseUIntArray(std::string const& detail, char const* key, std::vector<uint32>& out)
+{
+    std::string needle = std::string("\"") + key + "\"";
+    auto pos = detail.find(needle);
+    if (pos == std::string::npos)
+        return false;
+    pos = detail.find('[', pos);
+    if (pos == std::string::npos)
+        return false;
+    ++pos;
+    while (pos < detail.size() && detail[pos] != ']')
+    {
+        while (pos < detail.size() && (detail[pos] == ' ' || detail[pos] == ','))
+            ++pos;
+        if (pos >= detail.size() || detail[pos] == ']')
+            break;
+        char* end = nullptr;
+        unsigned long v = std::strtoul(detail.c_str() + pos, &end, 10);
+        if (end == detail.c_str() + pos)
+            break;
+        out.push_back(static_cast<uint32>(v));
+        pos = static_cast<size_t>(end - detail.c_str());
+    }
+    return !out.empty();
+}
+
+std::vector<uint32> ParseUIntArray(std::string const& detail, char const* key)
+{
+    std::vector<uint32> out;
+    ParseUIntArray(detail, key, out);
+    return out;
 }
 
 void ResetNavState(MyBotsJob& job)
@@ -481,12 +516,35 @@ MyBotsStepOutcome MyBotsExecutor::WaitUntil(Player* /*player*/, MyBotsJob& job, 
     return o;
 }
 
-MyBotsStepOutcome MyBotsExecutor::UntilQuestComplete(Player* player, uint32 questId)
+void MyBotsExecutor::ClearQuestCombat(Player* player, MyBotsJob& job)
+{
+    if (!job.questGrindEnabled)
+        return;
+    if (player)
+    {
+        player->AttackStop();
+        if (PlayerbotAI* ai = GET_PLAYERBOT_AI(player))
+            ai->ChangeStrategy("-grind,-rpg,-new rpg,-travel", BOT_STATE_NON_COMBAT);
+    }
+    job.questGrindEnabled = false;
+    job.questHuntEntry = 0;
+}
+
+MyBotsStepOutcome MyBotsExecutor::UntilQuestComplete(Player* player, MyBotsJob& job, uint32 questId,
+    std::string const& detail)
 {
     MyBotsStepOutcome o;
-    auto st = player->GetQuestStatus(questId);
+    if (!player || !questId)
+    {
+        o.result = MyBotsStepResult::Failed;
+        o.detail = "bad_until_args";
+        return o;
+    }
+
+    auto const st = player->GetQuestStatus(questId);
     if (st == QUEST_STATUS_COMPLETE || st == QUEST_STATUS_REWARDED)
     {
+        ClearQuestCombat(player, job);
         o.result = MyBotsStepResult::Done;
         o.detail = "quest_complete";
         return o;
@@ -497,10 +555,145 @@ MyBotsStepOutcome MyBotsExecutor::UntilQuestComplete(Player* player, uint32 ques
         o.detail = "quest_not_taken";
         return o;
     }
-    // Let combat/grind strategies from playerbots handle kills while we wait;
-    // for directed jobs we only poll status.
+
+    Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+    if (!quest)
+    {
+        o.result = MyBotsStepResult::Failed;
+        o.detail = "quest_missing";
+        return o;
+    }
+
+    // Temporarily let Playerbots fight while we shepherd movement onto objectives.
+    if (!job.questGrindEnabled)
+    {
+        if (PlayerbotAI* ai = GET_PLAYERBOT_AI(player))
+            ai->ChangeStrategy("+grind,-follow,-rpg quest", BOT_STATE_NON_COMBAT);
+        job.questGrindEnabled = true;
+    }
+
+    if (player->IsInCombat())
+    {
+        o.result = MyBotsStepResult::Running;
+        o.detail = "fighting";
+        return o;
+    }
+
+    // Prefer entries baked into the step; fall back to live plan from the template.
+    std::vector<uint32> entries = ParseUIntArray(detail, "entries");
+    if (entries.empty())
+    {
+        uint32 single = 0;
+        if (ParseUInt(detail, "entry", single) && single)
+            entries.push_back(single);
+    }
+    if (entries.empty())
+    {
+        MyBotsQuestPlan const plan = MyBotsQuestPlanner::Resolve(questId, detail);
+        entries = plan.objectiveEntries;
+    }
+
+    auto stillNeedsCreature = [&](uint32 entry) -> bool
+    {
+        bool listedAsKill = false;
+        for (uint8 i = 0; i < QUEST_OBJECTIVES_COUNT; ++i)
+        {
+            if (quest->RequiredNpcOrGo[i] != int32(entry))
+                continue;
+            listedAsKill = true;
+            if (player->GetReqKillOrCastCurrentCount(questId, int32(entry)) < quest->RequiredNpcOrGoCount[i])
+                return true;
+        }
+        if (listedAsKill)
+            return false; // kill objective finished for this entry
+
+        // Not a kill objective → treat as item-dropper; keep hunting until quest done.
+        return true;
+    };
+
+    uint32 hunt = 0;
+    float bestDist = 0.f;
+    for (uint32 entry : entries)
+    {
+        if (!entry || !stillNeedsCreature(entry))
+            continue;
+        if (Creature* live = FindNearestCreature(player, entry, 80.f))
+        {
+            float const d = player->GetDistance(live);
+            if (!hunt || d < bestDist)
+            {
+                hunt = entry;
+                bestDist = d;
+            }
+        }
+        else if (!hunt)
+            hunt = entry; // fall back to spawn walk
+    }
+    if (!hunt)
+    {
+        for (uint32 entry : entries)
+            if (entry && stillNeedsCreature(entry))
+            {
+                hunt = entry;
+                break;
+            }
+    }
+    if (!hunt && !entries.empty())
+        hunt = entries.front();
+
+    if (!hunt)
+    {
+        // No known creature to chase (GO / talk / explore quests). Keep grind on
+        // and wait — operator can cancel, or a script override should be used.
+        o.result = MyBotsStepResult::Running;
+        o.detail = "waiting_objectives";
+        return o;
+    }
+
+    job.questHuntEntry = hunt;
+
+    if (Creature* target = FindNearestCreature(player, hunt, 40.f))
+    {
+        if (player->IsWithinDistInMap(target, 5.f))
+        {
+            player->SetFacingToObject(target);
+            if (!player->GetVictim())
+                player->Attack(target, true);
+            if (PlayerbotAI* ai = GET_PLAYERBOT_AI(player))
+                TryDoAction(ai, "attack");
+            o.result = MyBotsStepResult::Running;
+            o.detail = "attacking";
+            return o;
+        }
+        MyBotsStepOutcome move = MoveTo(player, job, target->GetPositionX(), target->GetPositionY(),
+            target->GetPositionZ(), 4.f);
+        if (move.result == MyBotsStepResult::Failed)
+            return move;
+        o.result = MyBotsStepResult::Running;
+        o.detail = "hunting";
+        return o;
+    }
+
+    // Out of grid range: walk/fly toward the nearest spawn of this entry.
+    MyBotsStepOutcome move = MoveToCreature(player, job, hunt, 20.f);
+    if (move.result == MyBotsStepResult::Failed)
+    {
+        o.result = MyBotsStepResult::Running;
+        o.detail = "objective_spawn_missing";
+        return o;
+    }
+    if (move.result == MyBotsStepResult::Done)
+    {
+        // Arrived at spawn but no live creature — keep looking next tick.
+        o.result = MyBotsStepResult::Running;
+        o.detail = "waiting_spawn";
+        return o;
+    }
     o.result = MyBotsStepResult::Running;
-    o.detail = "waiting_objectives";
+    o.detail = move.detail == "moving" || move.detail.rfind("taxi_", 0) == 0 || move.detail == "in_flight"
+        || move.detail == "detour" || move.detail == "detour_retry" || move.detail == "repath"
+        ? move.detail
+        : "approaching_objective";
     return o;
 }
 
@@ -594,7 +787,7 @@ MyBotsStepOutcome MyBotsExecutor::RunStep(Player* player, MyBotsJob& job, std::s
         ParseUInt(detail, "questId", q);
         if (!q)
             ParseUInt(detail, "quest_id", q);
-        return UntilQuestComplete(player, q);
+        return UntilQuestComplete(player, job, q, detail);
     }
     if (op == "revive")
         return Revive(player);

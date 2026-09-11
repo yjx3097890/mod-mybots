@@ -1,6 +1,7 @@
 #include "MyBotsDirector.h"
 #include "MyBotsExecutor.h"
 #include "MyBotsJob.h"
+#include "MyBotsQuestPlan.h"
 #include "MyBotsUtil.h"
 
 #include "DatabaseEnv.h"
@@ -122,9 +123,15 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
     ensure.detail = "{}";
     steps.push_back(ensure);
 
-    // Prefer embedded steps or DB script
+    // Explicit steps in the request always win.
     std::string arr = ExtractJsonArray(payload, "steps");
-    if (arr.empty())
+    if (!arr.empty())
+    {
+        ParseStepsArray(arr, steps);
+        return steps;
+    }
+
+    // Optional hand-authored override in DB.
     {
         auto result = CharacterDatabase.Query(
             "SELECT script FROM mybots_quest_script WHERE quest_id = {}", questId);
@@ -134,55 +141,87 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
             arr = ExtractJsonArray(script, "steps");
             if (arr.empty() && !script.empty() && script.front() == '[')
                 arr = script;
+            if (!arr.empty())
+            {
+                ParseStepsArray(arr, steps);
+                return steps;
+            }
         }
     }
-    if (!arr.empty())
+
+    MyBotsQuestPlan const plan = MyBotsQuestPlanner::Resolve(questId, payload);
+    if (!plan.error.empty())
     {
-        ParseStepsArray(arr, steps);
+        // Keep a visible accept step so the job fails with a clear reason at runtime.
+        MyBotsJobStep a;
+        a.op = "accept_quest";
+        a.detail = "{\"questId\":" + std::to_string(questId) + "}";
+        steps.push_back(a);
         return steps;
     }
 
-    // Default HTN-ish skeleton from payload hints
-    uint32 giver = 0, turnin = 0;
-    MyBotsExecutor::ParseUInt(payload, "giverEntry", giver);
-    MyBotsExecutor::ParseUInt(payload, "turninEntry", turnin);
-    if (!turnin)
-        turnin = giver;
-
-    if (giver)
+    // Accept
+    if (plan.giverEntry)
     {
         MyBotsJobStep m;
         m.op = "move_to";
-        m.detail = "{\"entry\":" + std::to_string(giver) + "}";
+        m.detail = "{\"entry\":" + std::to_string(plan.giverEntry) + "}";
         steps.push_back(m);
         MyBotsJobStep a;
         a.op = "accept_quest";
-        a.detail = "{\"questId\":" + std::to_string(questId) + ",\"entry\":" + std::to_string(giver) + "}";
+        a.detail = "{\"questId\":" + std::to_string(questId) + ",\"entry\":" + std::to_string(plan.giverEntry) + "}";
         steps.push_back(a);
     }
     else
     {
+        // Board/item starters: accept if possible, otherwise already_have is fine.
         MyBotsJobStep a;
         a.op = "accept_quest";
         a.detail = "{\"questId\":" + std::to_string(questId) + "}";
         steps.push_back(a);
     }
 
-    MyBotsJobStep until;
-    until.op = "until";
-    until.detail = "{\"questId\":" + std::to_string(questId) + "}";
-    steps.push_back(until);
-
-    if (turnin)
+    // Hunt each objective creature, then keep grinding until the quest flips complete.
+    // until itself also re-homes onto incomplete objectives every tick.
+    for (uint32 entry : plan.objectiveEntries)
     {
         MyBotsJobStep m;
         m.op = "move_to";
-        m.detail = "{\"entry\":" + std::to_string(turnin) + "}";
+        m.detail = "{\"entry\":" + std::to_string(entry) + ",\"dist\":25}";
+        steps.push_back(m);
+    }
+
+    {
+        MyBotsJobStep until;
+        until.op = "until";
+        std::ostringstream detail;
+        detail << "{\"questId\":" << questId;
+        if (!plan.objectiveEntries.empty())
+        {
+            detail << ",\"entries\":[";
+            for (size_t i = 0; i < plan.objectiveEntries.size(); ++i)
+            {
+                if (i)
+                    detail << ",";
+                detail << plan.objectiveEntries[i];
+            }
+            detail << "]";
+        }
+        detail << "}";
+        until.detail = detail.str();
+        steps.push_back(until);
+    }
+
+    if (plan.turninEntry)
+    {
+        MyBotsJobStep m;
+        m.op = "move_to";
+        m.detail = "{\"entry\":" + std::to_string(plan.turninEntry) + "}";
         steps.push_back(m);
     }
     MyBotsJobStep t;
     t.op = "turnin_quest";
-    t.detail = "{\"questId\":" + std::to_string(questId) + ",\"entry\":" + std::to_string(turnin) + "}";
+    t.detail = "{\"questId\":" + std::to_string(questId) + ",\"entry\":" + std::to_string(plan.turninEntry) + "}";
     steps.push_back(t);
     return steps;
 }
@@ -391,6 +430,10 @@ void MyBotsDirector::TickJob(MyBotsJob& job)
         job.detourUntil = 0;
         job.moveIssuedAt = 0;
         job.taxiRetryAt = 0;
+        job.questHuntEntry = 0;
+        // until clears grind itself on success; keep flag consistent across steps
+        if (step.op != "until")
+            job.questGrindEnabled = false;
         sMyBotsJobStore.Save(job);
     }
     else if (outcome.result == MyBotsStepResult::Failed)
@@ -398,6 +441,7 @@ void MyBotsDirector::TickJob(MyBotsJob& job)
         step.status = MyBotsJobStatus::Failed;
         job.status = MyBotsJobStatus::Failed;
         job.error = outcome.detail;
+        MyBotsExecutor::ClearQuestCombat(player, job);
         sMyBotsJobStore.Save(job);
         sMyBotsJobStore.AppendEvent(job.charGuid, job.id, "job_failed", outcome.detail);
     }

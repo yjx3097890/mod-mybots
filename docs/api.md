@@ -98,7 +98,19 @@ Body 必含 `type`。可选 `replace`（默认跟 `MyBots.Job.Replace`）。
 }
 ```
 
-若 `mybots_quest_script` 有该 `quest_id`，优先用脚本 steps；也可在 body 里带 `"steps":[...]`。
+`giverEntry` / `turninEntry` 可选。不传时模块会从 `creature_queststarter` / `creature_questender`（以及 Playerbots TravelMgr 的任务目的地表）自动解析。
+
+**不传 `steps`、库里也没有 `mybots_quest_script` 时，系统会按任务模板自动生成完整脚本**，大致为：
+
+1. `ensure_selfbot`
+2. 有接任务 NPC → `move_to` + `accept_quest`（告示板等 GO 接取则跳过移动，直接 accept）
+3. 每个击杀/掉落目标生物 → `move_to`（去刷新点）
+4. `until`：临时挂上 `+grind`，靠近目标并攻击，直到任务目标完成
+5. `move_to` 交任务 NPC + `turnin_quest`
+
+若 body 里带了 `"steps":[...]`，或以 `mybots_quest_script` 手写脚本为准，则不再自动展开。
+
+任务 256（通缉 Chok'sul）这类「交物品」任务，目标生物来自 `creature_questitem` / Playerbots 已解析的掉落表；生成后的 `until.detail` 会带 `"entries":[生物entry,...]`。
 
 #### `patrol`
 
@@ -217,7 +229,7 @@ Body 必含 `type`。可选 `replace`（默认跟 `MyBots.Job.Replace`）。
 | `accept_quest` | `{"questId":7,"entry":197}` | 接任务 |
 | `turnin_quest` | `{"questId":7,"entry":197}` | 交任务 |
 | `wait` | `{"seconds":5}` | 等待 |
-| `until` | `{"questId":7}` | 等到任务目标完成 |
+| `until` | `{"questId":7,"entries":[6]}` | 主动靠近/攻击目标直至任务完成；`entries` 可由系统自动填 |
 | `revive` | `{}` | 复活 |
 
 ---

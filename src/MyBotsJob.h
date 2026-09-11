@@ -95,6 +95,9 @@ struct MyBotsJob
     float navSpawnX = 0.f;
     float navSpawnY = 0.f;
     float navSpawnZ = 0.f;
+    // until step temporarily enables grind; cleared when the step finishes.
+    bool questGrindEnabled = false;
+    uint32 questHuntEntry = 0;
 };
 
 struct MyBotsPatrol
