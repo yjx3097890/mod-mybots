@@ -1,0 +1,67 @@
+[worldserver]
+
+###################################################################################################
+#  mod-mybots
+#  Personal character director on top of official mod-playerbots.
+#  在官方 mod-playerbots 之上，对本机在线角色做托管/导演。
+###################################################################################################
+
+# Enable the module
+# 是否启用本模块
+# Default / 默认: 1
+MyBots.Enable = 1
+
+# Allow wrapping Playerbots Selfbot for a real online character
+# 是否允许给真实在线角色挂上 Playerbots Selfbot（由本模块封装启停）
+# Default / 默认: 1
+MyBots.Selfbot.Allow = 1
+
+# If 1, in-game players can only toggle Selfbot on themselves.
+# Console / SOAP / HTTP API can still target a named character.
+# 为 1 时：游戏内玩家只能对自己开关 Selfbot；
+# 控制台 / SOAP / HTTP API 仍可指定其他角色名。
+# Default / 默认: 1
+MyBots.Selfbot.SelfOnlyInGame = 1
+
+# After enabling Selfbot, drop Playerbots autonomous quest/travel so this
+# module can direct the character later.
+# 开启 Selfbot 后去掉 Playerbots 自带的任务/旅行/RPG 自主策略，
+# 方便本模块后续接管导演，避免双方抢控制。
+# Default / 默认: 1
+MyBots.Selfbot.DisableRpgQuest = 1
+
+###################################################################################################
+#  Local JSON API for your existing management backend
+#  给已有管理系统后端用的 JSON API
+#
+#  Bind to loopback only when host-network / same-container.
+#  On a shared Docker bridge, bind 0.0.0.0 and keep the port off the public internet.
+#  host 网络或同容器访问时可绑 127.0.0.1；
+#  Docker 网桥互通时可绑 0.0.0.0，但不要把该端口映射到公网。
+###################################################################################################
+
+# Enable the HTTP JSON API
+# 是否启用 HTTP JSON API
+# Default / 默认: 1
+MyBots.Api.Enable = 1
+
+# Bind address
+# 监听地址
+# Default / 默认: "127.0.0.1"
+MyBots.Api.Bind = "0.0.0.0"
+
+# TCP port
+# TCP 端口
+# Default / 默认: 9100
+MyBots.Api.Port = 9100
+
+# Shared secret. Send as: Authorization: Bearer <token>
+# Leave empty to reject all API requests.
+# 共享密钥，请求头带：Authorization: Bearer <token>
+# 留空则拒绝所有 API 请求。请务必改掉默认值。
+MyBots.Api.Token = "change-me"
+
+# How long an HTTP call waits for the map thread to finish (milliseconds)
+# HTTP 请求等待地图线程执行完成的超时时间（毫秒）
+# Default / 默认: 3000
+MyBots.Api.TimeoutMs = 3000

@@ -1,0 +1,8 @@
+*~
+*.orig
+*.rej
+.DS_Store
+.idea/
+.vscode/
+*.swp
+conf/mybots.conf
