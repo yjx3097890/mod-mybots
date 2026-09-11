@@ -243,6 +243,33 @@ curl -s http://<worldserver容器或主机>:9100/v1/characters/Thralljr/selfbot 
 3. `.mybots status` 或 `GET /v1/characters/Name` 里 `selfbot` 为 true  
 4. `off` / `enabled:false` 后停止托管  
 
+## Job API（P1+）
+
+作业异步：`POST .../jobs` 返回 **202** + `jobId`，用 GET 轮询状态。意图队列满返回 **429**。
+
+```bash
+# 去坐标
+curl -s http://127.0.0.1:9100/v1/characters/Yjx/jobs \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"type":"move_to","x":-8895,"y":-133,"z":80}'
+
+# 做任务
+curl -s http://127.0.0.1:9100/v1/characters/Yjx/jobs \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"type":"complete_quest","questId":7,"giverEntry":197}'
+
+# 巡逻（需先有 patrol 定义，seed 含 demo-northshire）
+curl -s http://127.0.0.1:9100/v1/characters/Yjx/jobs \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"type":"patrol","patrolId":"demo-northshire"}'
+```
+
+其它：`GET/DELETE .../jobs/{jobId}`、`POST .../pause|resume`、`GET .../events`、`GET/POST /v1/patrols`。
+
+管理端请对接本模块 HTTP，接口说明见 [docs/api.md](docs/api.md)。本仓库不包含管理端实现。
+
+Job 运行时请保持 `MyBots.Selfbot.DisableRpgQuest = 1`。`IgnoreClientMovement = 1` 可减轻闪现/橡皮筋。
+
 ## JSON API 参考
 
 所有写操作和角色查询都要带：

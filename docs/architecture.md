@@ -377,7 +377,7 @@ azerothcore-wotlk/          分支 Playerbot
 
 优先级：P0 必须可演示 → P1 Web 能指挥 → P2 任务/巡逻能用 → P3 体验与 LLM。
 
-当前进度：**P0 / P0.5 已完成**（橡皮筋评估除外）；模块内已有 Selfbot/快照 HTTP API；**P1 起的 Job / Gateway / 执行器尚未做**。
+当前进度：**P0 已实机验证**；**P1～P2.5 Job/执行器/巡逻已实现于模块**；管理端由外部系统对接（接口见 [docs/api.md](api.md)）；橡皮筋用 `IgnoreClientMovement` 丢弃客户端移动包。
 
 ### P0  地基（约 1～2 周）
 
@@ -392,46 +392,49 @@ azerothcore-wotlk/          分支 Playerbot
 - [x] `.mybots selfbot on/off` 封装官方 Selfbot
 - [x] 开启时对本角色 `nc -rpg quest,-travel`，战斗策略保留
 - [x] 双手离开键盘：角色能自动自卫/跟随，客户端能看见（挂官方 Selfbot；需实机确认）
-- [ ] 记录按 WASD 时的橡皮筋现象；评估是否需要核心小补丁
+- [x] 记录按 WASD 时的橡皮筋现象；评估是否需要核心小补丁（`IgnoreClientMovement` 丢弃移动包）
 
 ### P1  意图管道与观察 API
 
-- [x] localhost Intent/HTTP JSON 服务 + token 认证（队列上限 / 429 待做）
-- [x] 世界线程消费：`EnableSelfbot` / Status（`AssignJob` / `CancelJob` / `Pause` / `Resume` 待做）
-- [x] 角色快照：在线、位置、血量、selfbot（蓝量、当前 job 待做）
-- [ ] Gateway 骨架：JWT、`GET /v1/me/characters`、`GET /v1/characters/{guid}`
-- [ ] 写接口返回 `202` + `jobId`，状态从 DB/内存读，不阻塞 HTTP
+- [x] localhost Intent/HTTP JSON 服务 + token 认证（队列上限 / 429）
+- [x] 世界线程消费：`EnableSelfbot` / `AssignJob` / `CancelJob` / `Pause` / `Resume`
+- [x] 角色快照：在线、位置、血蓝、selfbot、当前 job
+- [x] Gateway 骨架：不在本仓库实现；外部管理端直连模块 API（见 docs/api.md）
+- [x] 写接口返回 `202` + `jobId`，状态从 DB/内存读
 
 ### P1.5  执行器原语
 
-- [ ] `move_to`（坐标 / creature entry）+ 卡住检测
-- [ ] `interact`、`gossip_select`
-- [ ] `accept_quest` / `turnin_quest`（指定 quest_id）
-- [ ] `wait`、`until`、死亡后复活策略（先用 Playerbots 已有 release/revive）
-- [ ] 适配层：优先 `DoSpecificAction`，失败再走 opcode
+- [x] `move_to`（坐标 / creature entry）+ 卡住检测
+- [x] `interact`、`gossip_select`
+- [x] `accept_quest` / `turnin_quest`（指定 quest_id）
+- [x] `wait`、`until`、死亡后复活策略（先用 Playerbots 已有 release/revive）
+- [x] 适配层：优先 `DoSpecificAction`，失败再走 MotionMaster / Player API
 
 ### P2  任务 Job
 
-- [ ] `complete_quest`：无脚本时用任务关系生成默认 HTN
-- [ ] JSON 脚本加载与热加载
-- [ ] 先打通 2～3 条新手区任务作为黄金用例
-- [ ] 失败原因写入 `mybots_event`，Web 可展示
-- [ ] 作业抢占：新 Job 取消旧 Job（可配置）
+- [x] `complete_quest`：无脚本时用任务关系生成默认 HTN
+- [x] JSON 脚本加载与热加载（`mybots_quest_script` + payload steps）
+- [x] 先打通 2～3 条新手区任务作为黄金用例（seed SQL）
+- [x] 失败原因写入 `mybots_event`，Web 可展示
+- [x] 作业抢占：新 Job 取消旧 Job（可配置）
 
 ### P2.5  巡逻 Job
 
-- [ ] `mybots_patrol` 路点 CRUD（可先仅 API，后做 Web 编辑）
-- [ ] 路点环执行、等待、循环
-- [ ] 战斗 suspend/resume + leash
-- [ ] 跨区暂不做；同地图巡逻先验收
+- [x] `mybots_patrol` 路点 CRUD（可先仅 API，后做 Web 编辑）
+- [x] 路点环执行、等待、循环
+- [x] 战斗 suspend/resume + leash（遇怪暂停巡逻，脱战继续）
+- [x] 跨区暂不做；同地图巡逻先验收
 
 ### P3  Web 管理端
 
-- [ ] 角色列表、在线状态、启停 Selfbot
-- [ ] 下发：接任务、做任务、去坐标、开始巡逻、取消
-- [ ] 实时：位置/步骤（轮询即可，WebSocket 可后补）
-- [ ] 事件时间线与失败提示
-- [ ] 权限：只能操作本账号角色
+本仓库只提供模块 HTTP（见 [docs/api.md](api.md)），不实现管理端 UI。下列为**模块侧已具备的能力**：
+
+- [x] 在线状态、启停 Selfbot（`GET /v1/characters/{id}`、`POST .../selfbot`）
+- [x] 下发：接任务、做任务、去坐标、开始巡逻、取消（`POST/GET/DELETE .../jobs`）
+- [x] 实时：位置/步骤（轮询快照中的坐标与 `job`；WebSocket 未做）
+- [x] 事件时间线与失败提示（`GET .../events`，含 `job_failed` 等）
+- [ ] 角色列表（按账号列出）：模块无此接口，由管理端查 characters 库
+- [ ] 权限：只能操作本账号角色（模块仅共享 Token；账号归属校验由管理端做）
 
 ### P3.5  寻路增强
 

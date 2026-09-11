@@ -1,5 +1,8 @@
 #include "MyBotsSelfbot.h"
 #include "MyBotsConfig.h"
+#include "MyBotsDirector.h"
+#include "MyBotsJob.h"
+#include "MyBotsUtil.h"
 
 #include "Log.h"
 #include "Player.h"
@@ -34,20 +37,7 @@ MyBotsResult Ok(std::string const& code, std::string const& message)
 
 void JsonEscape(std::string const& in, std::string& out)
 {
-    out.clear();
-    out.reserve(in.size() + 8);
-    for (char c : in)
-    {
-        switch (c)
-        {
-            case '\\': out += "\\\\"; break;
-            case '"': out += "\\\""; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default: out += c; break;
-        }
-    }
+    MyBotsJsonEscape(in, out);
 }
 
 void DisableAutonomousQuesting(PlayerbotAI* ai)
@@ -157,7 +147,14 @@ std::string MyBotsSelfbot::SnapshotJson(Player* player)
        << ",\"o\":" << player->GetOrientation()
        << ",\"level\":" << static_cast<uint32>(player->GetLevel())
        << ",\"class\":" << static_cast<uint32>(player->getClass())
-       << ",\"hp\":[" << player->GetHealth() << "," << player->GetMaxHealth() << "]";
+       << ",\"hp\":[" << player->GetHealth() << "," << player->GetMaxHealth() << "]"
+       << ",\"power\":[" << player->GetPower(player->getPowerType()) << ","
+       << player->GetMaxPower(player->getPowerType()) << "]";
+
+    if (auto job = sMyBotsJobStore.GetActiveForChar(player->GetGUID().GetCounter()))
+        ss << ",\"job\":" << MyBotsDirector::JobToJson(*job);
+    else
+        ss << ",\"job\":null";
 
     if (player->GetSession())
         ss << ",\"latencyMs\":" << player->GetSession()->GetLatency();

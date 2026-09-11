@@ -16,7 +16,16 @@ enum class MyBotsIntentOp
 {
     Status,
     SelfbotOn,
-    SelfbotOff
+    SelfbotOff,
+    AssignJob,
+    CancelJob,
+    PauseJob,
+    ResumeJob,
+    ListJobs,
+    GetJob,
+    ListEvents,
+    UpsertPatrol,
+    ListPatrols
 };
 
 struct MyBotsIntent
@@ -24,6 +33,10 @@ struct MyBotsIntent
     MyBotsIntentOp op = MyBotsIntentOp::Status;
     std::string playerName;
     uint32 guidLow = 0;
+    std::string jobId;
+    std::string jobType;
+    std::string payload;
+    bool replace = true;
     std::string response;
     int httpStatus = 500;
     bool done = false;
@@ -34,7 +47,8 @@ class MyBotsIntentQueue
 public:
     static MyBotsIntentQueue& Instance();
 
-    std::shared_ptr<MyBotsIntent> Submit(MyBotsIntentOp op, std::string playerName, uint32 guidLow);
+    // Returns nullptr if queue is full.
+    std::shared_ptr<MyBotsIntent> Submit(MyBotsIntent intent);
     bool Wait(std::shared_ptr<MyBotsIntent> const& intent, uint32 timeoutMs);
     void DrainOnWorldThread();
 

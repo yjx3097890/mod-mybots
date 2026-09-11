@@ -29,17 +29,18 @@ MyBots.Selfbot.SelfOnlyInGame = 1
 # 方便本模块后续接管导演，避免双方抢控制。
 # Set to 0 to enable official autonomous play: +new rpg,+grind,-follow
 # 设为 0 时主动挂上官方自主游玩策略（Selfbot 默认不会像随机机器人那样自己玩）。
+# Job 导演运行时应保持为 1，避免与 Job 抢控制。
 # Default / 默认: 1
 MyBots.Selfbot.DisableRpgQuest = 1
+
+# Drop client movement packets while Selfbot AI is attached (reduces rubber-banding).
+# Selfbot 挂载期间丢弃客户端移动包，减轻闪现/橡皮筋。旁观更稳。
+# Default / 默认: 1
+MyBots.Selfbot.IgnoreClientMovement = 1
 
 ###################################################################################################
 #  Local JSON API for your existing management backend
 #  给已有管理系统后端用的 JSON API
-#
-#  Bind to loopback only when host-network / same-container.
-#  On a shared Docker bridge, bind 0.0.0.0 and keep the port off the public internet.
-#  host 网络或同容器访问时可绑 127.0.0.1；
-#  Docker 网桥互通时可绑 0.0.0.0，但不要把该端口映射到公网。
 ###################################################################################################
 
 # Enable the HTTP JSON API
@@ -58,12 +59,34 @@ MyBots.Api.Bind = "0.0.0.0"
 MyBots.Api.Port = 9100
 
 # Shared secret. Send as: Authorization: Bearer <token>
-# Leave empty to reject all API requests.
 # 共享密钥，请求头带：Authorization: Bearer <token>
-# 留空则拒绝所有 API 请求。请务必改掉默认值。
 MyBots.Api.Token = "change-me"
 
-# How long an HTTP call waits for the map thread to finish (milliseconds)
-# HTTP 请求等待地图线程执行完成的超时时间（毫秒）
+# How long an HTTP call waits for the world thread (milliseconds)
+# HTTP 等待世界线程处理意图的超时（毫秒）
 # Default / 默认: 3000
 MyBots.Api.TimeoutMs = 3000
+
+# Max pending intents; excess returns HTTP 429
+# 意图队列上限，超出返回 429
+# Default / 默认: 64
+MyBots.Api.QueueMax = 64
+
+###################################################################################################
+#  Jobs / Director / Executor
+###################################################################################################
+
+# New job cancels the previous active job for the same character
+# 新作业是否抢占同一角色的旧作业
+# Default / 默认: 1
+MyBots.Job.Replace = 1
+
+# Seconds without meaningful movement before move_to fails as stuck
+# move_to 卡住判定秒数
+# Default / 默认: 45
+MyBots.Executor.StuckTimeoutSec = 45
+
+# Director tick interval (milliseconds)
+# 导演心跳间隔（毫秒）
+# Default / 默认: 1000
+MyBots.Director.TickMs = 1000
