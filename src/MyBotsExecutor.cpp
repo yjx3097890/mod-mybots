@@ -13,6 +13,7 @@
 #include "PlayerbotAI.h"
 #include "Playerbots.h"
 #include "QuestDef.h"
+#include "SharedDefines.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -387,6 +388,16 @@ MyBotsStepOutcome MyBotsExecutor::MoveToCreature(Player* player, MyBotsJob& job,
         job.navSpawnEntry = entry;
         job.navSpawnX = sx;
         job.navSpawnY = sy;
+        // Prefer the surface continuous with the player, not a stale/cave spawn Z.
+        float surface = player->GetMapHeight(sx, sy, player->GetPositionZ());
+        if (surface > INVALID_HEIGHT)
+            sz = surface;
+        else
+        {
+            surface = player->GetMapHeight(sx, sy, sz);
+            if (surface > INVALID_HEIGHT)
+                sz = surface;
+        }
         job.navSpawnZ = sz;
     }
 

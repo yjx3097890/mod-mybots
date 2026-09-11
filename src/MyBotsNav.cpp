@@ -142,56 +142,105 @@ bool MyBotsNav::PrepareWalkTarget(Player* player, float& x, float& y, float& z)
     if (!player)
         return false;
 
-    // Mirror Playerbots MovementAction::SearchForBestPath: pick a floor near the
-    // *requested* Z (not from the sky), then keep the shortest mmap-valid path.
+    // Match Playerbots SearchForBestPath closely:
+    // - keep the requested X/Y (do NOT replace with PathGenerator's actual end —
+    //   incomplete paths often end inside terrain / under the mesh)
+    // - only search for a walkable Z near the requested Z
+    // - prefer PATHFIND_NORMAL over INCOMPLETE
     float const reqX = x;
     float const reqY = y;
     float const reqZ = z;
 
-    int const typeOk = PATHFIND_NORMAL | PATHFIND_INCOMPLETE;
     float bestLen = 0.f;
-    float bestX = reqX;
-    float bestY = reqY;
     float bestZ = INVALID_HEIGHT;
-    bool found = false;
+    bool foundNormal = false;
+    bool foundAny = false;
 
-    auto tryZ = [&](float candidateZ)
+    auto consider = [&](float candidateZ, bool requireCloseToReq)
     {
         if (candidateZ <= INVALID_HEIGHT)
+            return;
+
+        // Re-sample floor at this candidate so we never keep a floating/sunk Z.
+        float floorZ = player->GetMapHeight(reqX, reqY, candidateZ);
+        if (floorZ <= INVALID_HEIGHT)
+            return;
+        if (std::fabs(floorZ - candidateZ) > 2.f)
+            candidateZ = floorZ;
+
+        if (requireCloseToReq && std::fabs(candidateZ - reqZ) > 0.5f)
             return;
 
         PathGenerator gen(player);
         if (!gen.CalculatePath(reqX, reqY, candidateZ, /*forceDest=*/false))
             return;
-        if (!(gen.GetPathType() & typeOk))
+
+        uint32 const type = gen.GetPathType();
+        bool const isNormal = (type & PATHFIND_NORMAL) != 0;
+        bool const isIncomplete = (type & PATHFIND_INCOMPLETE) != 0;
+        if (!isNormal && !isIncomplete)
+            return;
+
+        // Incomplete paths that dive far below the player are the usual "run
+        // underground for a few seconds" symptom at quest start.
+        G3D::Vector3 const& end = gen.GetActualEndPosition();
+        if (isIncomplete && end.z < player->GetPositionZ() - 6.f)
+            return;
+        if (candidateZ < player->GetPositionZ() - 25.f
+            && std::fabs(candidateZ - reqZ) > 8.f)
             return;
 
         float const len = gen.getPathLength();
-        if (!found || len < bestLen)
+        if (isNormal)
         {
-            found = true;
+            if (!foundNormal || len < bestLen)
+            {
+                foundNormal = true;
+                foundAny = true;
+                bestLen = len;
+                bestZ = candidateZ;
+            }
+            return;
+        }
+
+        // Incomplete only if we still have no normal path.
+        if (!foundNormal && (!foundAny || len < bestLen))
+        {
+            foundAny = true;
             bestLen = len;
-            G3D::Vector3 const& end = gen.GetActualEndPosition();
-            bestX = end.x;
-            bestY = end.y;
-            bestZ = end.z;
+            bestZ = candidateZ;
         }
     };
 
-    tryZ(player->GetMapHeight(reqX, reqY, reqZ));
-
-    // Probe a few meters above/below the requested Z — same idea as playerbots.
-    static float const kStep = 2.f;
-    for (int i = 1; i <= 6; ++i)
-        tryZ(player->GetMapHeight(reqX, reqY, reqZ + kStep * float(i)));
-    for (int i = 1; i <= 6; ++i)
-        tryZ(player->GetMapHeight(reqX, reqY, reqZ - kStep * float(i)));
-
-    if (!found)
+    // Exact hit near requested Z first (playerbots early-out).
+    consider(player->GetMapHeight(reqX, reqY, reqZ), true);
+    if (foundNormal)
     {
-        // Last resort: Unit helper that respects collision height, still near z.
+        x = reqX;
+        y = reqY;
+        z = bestZ;
+        return true;
+    }
+
+    static float const kStep = 2.f;
+    for (int i = 0; i <= 8; ++i)
+        consider(player->GetMapHeight(reqX, reqY, reqZ + kStep * float(i)), false);
+    for (int i = 1; i <= 8; ++i)
+        consider(player->GetMapHeight(reqX, reqY, reqZ - kStep * float(i)), false);
+
+    // Also try the player's own floor height at the destination XY — useful when
+    // spawn Z is stale but the surface the character is already on continues there.
+    consider(player->GetMapHeight(reqX, reqY, player->GetPositionZ()), false);
+
+    if (!foundAny)
+    {
         float fallback = reqZ;
         player->UpdateAllowedPositionZ(reqX, reqY, fallback);
+        if (fallback <= INVALID_HEIGHT)
+            return false;
+        // Still refuse a fallback that would aim deep under the character.
+        if (fallback < player->GetPositionZ() - 15.f)
+            fallback = player->GetMapHeight(reqX, reqY, player->GetPositionZ());
         if (fallback <= INVALID_HEIGHT)
             return false;
         x = reqX;
@@ -200,8 +249,8 @@ bool MyBotsNav::PrepareWalkTarget(Player* player, float& x, float& y, float& z)
         return true;
     }
 
-    x = bestX;
-    y = bestY;
+    x = reqX;
+    y = reqY;
     z = bestZ;
     return true;
 }

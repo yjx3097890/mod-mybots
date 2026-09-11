@@ -1,6 +1,7 @@
 #include "MyBotsDirector.h"
 #include "MyBotsExecutor.h"
 #include "MyBotsJob.h"
+#include "MyBotsNav.h"
 #include "MyBotsQuestPlan.h"
 #include "MyBotsUtil.h"
 
@@ -387,6 +388,9 @@ void MyBotsDirector::TickJob(MyBotsJob& job)
         if (r.result != MyBotsStepResult::Done)
             return;
     }
+
+    // Recover from a bad first MovePoint before the next step runs.
+    MyBotsNav::CorrectIfUnderground(player);
 
     if (job.stepIndex < 0 || job.stepIndex >= static_cast<int>(job.steps.size()))
     {
