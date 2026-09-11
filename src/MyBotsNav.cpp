@@ -17,6 +17,7 @@
 #include "TravelMgr.h"
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -134,6 +135,33 @@ MyBotsTaxiResult MyBotsNav::TryTaxi(Player* player, float x, float y, float z,
     return MyBotsTaxiResult::Boarded;
 }
 
+bool MyBotsNav::SnapToGround(Player* player, float& x, float& y, float& z)
+{
+    if (!player)
+        return false;
+
+    Map* map = player->GetMap();
+    if (!map)
+        return false;
+
+    uint32 const phase = player->GetPhaseMask();
+    float const hintZ = std::max(z, player->GetPositionZ()) + 5.f;
+
+    float ground = map->GetHeight(phase, x, y, hintZ, true, 100.f);
+    if (ground < -50000.f)
+        ground = map->GetHeight(phase, x, y, 2000.f, true, 2500.f);
+    if (ground < -50000.f)
+        return false;
+
+    // Reject absurd vertical jumps that usually mean the wrong height layer.
+    if (std::fabs(ground - player->GetPositionZ()) > 60.f
+        && std::fabs(ground - z) > 60.f)
+        return false;
+
+    z = ground;
+    return true;
+}
+
 bool MyBotsNav::ComputeDetour(Player* player, float destX, float destY, float destZ, uint32 attempt,
     float& outX, float& outY, float& outZ)
 {
@@ -147,19 +175,15 @@ bool MyBotsNav::ComputeDetour(Player* player, float destX, float destY, float de
     float const baseAngle = player->GetAngle(destX, destY);
     float const radius = sMyBotsConfig.NavDetourRadius() * float(1 + attempt / kAngleCount);
 
-    Map* map = player->GetMap();
-    if (!map)
-        return false;
-
     for (uint32 i = 0; i < kAngleCount; ++i)
     {
         float const angle = baseAngle + kAngles[(attempt + i) % kAngleCount];
-        float const cx = player->GetPositionX() + std::cos(angle) * radius;
-        float const cy = player->GetPositionY() + std::sin(angle) * radius;
+        float cx = player->GetPositionX() + std::cos(angle) * radius;
+        float cy = player->GetPositionY() + std::sin(angle) * radius;
+        float cz = player->GetPositionZ();
 
-        float cz = map->GetHeight(player->GetPhaseMask(), cx, cy, player->GetPositionZ() + 5.f);
-        if (cz < -50000.f)
-            cz = player->GetPositionZ();
+        if (!SnapToGround(player, cx, cy, cz))
+            continue;
 
         if (std::fabs(cz - player->GetPositionZ()) > 12.f)
             continue;

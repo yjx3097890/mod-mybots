@@ -108,6 +108,10 @@ void ResetNavState(MyBotsJob& job)
 void IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool force)
 {
     uint32 const now = MyBotsNow();
+
+    // Never aim at raw spawn/DBC Z — that is what puts Selfbots in the sky or under the floor.
+    MyBotsNav::SnapToGround(player, x, y, z);
+
     bool const sameTarget = std::fabs(job.moveTargetX - x) < 1.f
         && std::fabs(job.moveTargetY - y) < 1.f
         && std::fabs(job.moveTargetZ - z) < 1.f;
@@ -122,8 +126,9 @@ void IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool f
     job.moveTargetZ = z;
     job.moveIssuedAt = now;
 
-    player->GetMotionMaster()->Clear();
-    player->GetMotionMaster()->MovePoint(1, x, y, z);
+    // generatePath=true, forceDestination=false: if MMAP cannot reach the point,
+    // do not skate in a straight line through terrain (the float/clip symptom).
+    player->GetMotionMaster()->MovePoint(1, x, y, z, FORCED_MOVEMENT_NONE, 0.f, 0.f, true, false);
 }
 } // namespace
 

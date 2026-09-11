@@ -26,6 +26,10 @@ public:
     static MyBotsTaxiResult TryTaxi(Player* player, float x, float y, float z,
         float& boardX, float& boardY, float& boardZ, std::string& detail);
 
+    // Project a destination onto walkable ground so MovePoint does not aim at
+    // floating spawn Z / DBC taxi Z / bad detour heights.
+    static bool SnapToGround(Player* player, float& x, float& y, float& z);
+
     // Side offset used when the straight line keeps failing.
     static bool ComputeDetour(Player* player, float destX, float destY, float destZ, uint32 attempt,
         float& outX, float& outY, float& outZ);
