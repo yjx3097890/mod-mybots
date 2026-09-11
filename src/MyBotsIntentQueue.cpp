@@ -195,7 +195,7 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
             else if (intent.replace || sMyBotsConfig.JobReplace())
                 sMyBotsJobStore.CancelActive(guid, "replaced");
 
-            auto steps = MyBotsDirector::BuildStepsForAssign(intent.jobType, intent.payload);
+            auto steps = MyBotsDirector::BuildStepsForAssign(intent.jobType, intent.payload, player);
             if (steps.size() <= 1)
             {
                 finish(400, "{\"ok\":false,\"code\":\"bad_job\",\"message\":\"could not build steps for job type\"}");

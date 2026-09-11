@@ -15,8 +15,10 @@ class MyBotsDirector
 public:
     static void TickJob(MyBotsJob& job);
 
-    static std::vector<MyBotsJobStep> BuildStepsForAssign(std::string const& type, std::string const& payload);
-    static std::vector<MyBotsJobStep> BuildCompleteQuest(uint32 questId, std::string const& payload);
+    static std::vector<MyBotsJobStep> BuildStepsForAssign(std::string const& type, std::string const& payload,
+        Player* player = nullptr);
+    static std::vector<MyBotsJobStep> BuildCompleteQuest(uint32 questId, std::string const& payload,
+        Player* player = nullptr);
     static std::vector<MyBotsJobStep> BuildMoveTo(std::string const& payload);
     static std::vector<MyBotsJobStep> BuildPatrol(std::string const& patrolId, std::string const& payload);
 

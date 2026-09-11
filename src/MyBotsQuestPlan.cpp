@@ -78,10 +78,12 @@ MyBotsQuestPlan MyBotsQuestPlanner::Resolve(uint32 questId, std::string const& p
     for (uint8 i = 0; i < QUEST_OBJECTIVES_COUNT; ++i)
     {
         int32 const req = quest->RequiredNpcOrGo[i];
-        if (req > 0 && quest->RequiredNpcOrGoCount[i] > 0)
+        if (quest->RequiredNpcOrGoCount[i] == 0)
+            continue;
+        if (req > 0)
             AddUnique(plan.objectiveEntries, uint32(req));
-        // GameObject objectives (req < 0) are not auto-hunted yet; until still
-        // polls completion so a script override can fill the gap.
+        else if (req < 0)
+            plan.hasObjectives = true; // GO objective — until still needed
     }
 
     for (uint8 i = 0; i < QUEST_ITEM_OBJECTIVES_COUNT; ++i)
@@ -122,9 +124,13 @@ MyBotsQuestPlan MyBotsQuestPlanner::Resolve(uint32 questId, std::string const& p
     }
 #endif
 
+    if (!plan.objectiveEntries.empty())
+        plan.hasObjectives = true;
+
     LOG_INFO("module.mybots",
-        "MyBots quest plan {}: giver={} turnin={} objectives={}",
-        questId, plan.giverEntry, plan.turninEntry, plan.objectiveEntries.size());
+        "MyBots quest plan {}: giver={} turnin={} objectives={} hasObj={}",
+        questId, plan.giverEntry, plan.turninEntry, plan.objectiveEntries.size(),
+        plan.hasObjectives ? 1 : 0);
 
     return plan;
 }

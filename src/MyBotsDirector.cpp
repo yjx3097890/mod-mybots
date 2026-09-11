@@ -11,6 +11,7 @@
 #include "ObjectGuid.h"
 #include "Player.h"
 #include "QueryResult.h"
+#include "QuestDef.h"
 
 #include <sstream>
 
@@ -116,7 +117,8 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildMoveTo(std::string const& payloa
     return steps;
 }
 
-std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, std::string const& payload)
+std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, std::string const& payload,
+    Player* player)
 {
     std::vector<MyBotsJobStep> steps;
     MyBotsJobStep ensure;
@@ -153,7 +155,6 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
     MyBotsQuestPlan const plan = MyBotsQuestPlanner::Resolve(questId, payload);
     if (!plan.error.empty())
     {
-        // Keep a visible accept step so the job fails with a clear reason at runtime.
         MyBotsJobStep a;
         a.op = "accept_quest";
         a.detail = "{\"questId\":" + std::to_string(questId) + "}";
@@ -161,38 +162,49 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
         return steps;
     }
 
-    // Accept
-    if (plan.giverEntry)
+    QuestStatus const st = player ? player->GetQuestStatus(questId) : QUEST_STATUS_NONE;
+    bool const alreadyHave = st == QUEST_STATUS_INCOMPLETE || st == QUEST_STATUS_COMPLETE;
+    bool const readyToTurnIn = st == QUEST_STATUS_COMPLETE;
+    bool const alreadyRewarded = st == QUEST_STATUS_REWARDED;
+
+    // Accept only when the character does not already have the quest. Otherwise
+    // a speak-quest like 1638 would first run back to the Goldshire trainer
+    // while the player is already in Stormwind waiting on Harry.
+    if (!alreadyHave)
     {
-        MyBotsJobStep m;
-        m.op = "move_to";
-        m.detail = "{\"entry\":" + std::to_string(plan.giverEntry) + "}";
-        steps.push_back(m);
-        MyBotsJobStep a;
-        a.op = "accept_quest";
-        a.detail = "{\"questId\":" + std::to_string(questId) + ",\"entry\":" + std::to_string(plan.giverEntry) + "}";
-        steps.push_back(a);
-    }
-    else
-    {
-        // Board/item starters: accept if possible, otherwise already_have is fine.
-        MyBotsJobStep a;
-        a.op = "accept_quest";
-        a.detail = "{\"questId\":" + std::to_string(questId) + "}";
-        steps.push_back(a);
+        if (plan.giverEntry)
+        {
+            MyBotsJobStep m;
+            m.op = "move_to";
+            m.detail = "{\"entry\":" + std::to_string(plan.giverEntry) + "}";
+            steps.push_back(m);
+            MyBotsJobStep a;
+            a.op = "accept_quest";
+            a.detail = "{\"questId\":" + std::to_string(questId) + ",\"entry\":"
+                + std::to_string(plan.giverEntry) + "}";
+            steps.push_back(a);
+        }
+        else
+        {
+            MyBotsJobStep a;
+            a.op = "accept_quest";
+            a.detail = "{\"questId\":" + std::to_string(questId) + "}";
+            steps.push_back(a);
+        }
     }
 
-    // Hunt each objective creature, then keep grinding until the quest flips complete.
-    // until itself also re-homes onto incomplete objectives every tick.
-    for (uint32 entry : plan.objectiveEntries)
+    // Kill/collect objectives. Speak/deliver quests have none — skip until and
+    // go straight to the turn-in NPC (until would wait forever for COMPLETE).
+    if (plan.hasObjectives && !readyToTurnIn && !alreadyRewarded)
     {
-        MyBotsJobStep m;
-        m.op = "move_to";
-        m.detail = "{\"entry\":" + std::to_string(entry) + ",\"dist\":25}";
-        steps.push_back(m);
-    }
+        for (uint32 entry : plan.objectiveEntries)
+        {
+            MyBotsJobStep m;
+            m.op = "move_to";
+            m.detail = "{\"entry\":" + std::to_string(entry) + ",\"dist\":25}";
+            steps.push_back(m);
+        }
 
-    {
         MyBotsJobStep until;
         until.op = "until";
         std::ostringstream detail;
@@ -213,17 +225,31 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
         steps.push_back(until);
     }
 
-    if (plan.turninEntry)
+    if (!alreadyRewarded)
     {
-        MyBotsJobStep m;
-        m.op = "move_to";
-        m.detail = "{\"entry\":" + std::to_string(plan.turninEntry) + "}";
-        steps.push_back(m);
+        if (plan.turninEntry)
+        {
+            MyBotsJobStep m;
+            m.op = "move_to";
+            m.detail = "{\"entry\":" + std::to_string(plan.turninEntry) + "}";
+            steps.push_back(m);
+        }
+        MyBotsJobStep t;
+        t.op = "turnin_quest";
+        t.detail = "{\"questId\":" + std::to_string(questId) + ",\"entry\":"
+            + std::to_string(plan.turninEntry) + "}";
+        steps.push_back(t);
     }
-    MyBotsJobStep t;
-    t.op = "turnin_quest";
-    t.detail = "{\"questId\":" + std::to_string(questId) + ",\"entry\":" + std::to_string(plan.turninEntry) + "}";
-    steps.push_back(t);
+
+    // Nothing left to do (already rewarded) — keep a no-op wait so the job is not empty.
+    if (steps.size() == 1)
+    {
+        MyBotsJobStep w;
+        w.op = "wait";
+        w.detail = "{\"seconds\":0}";
+        steps.push_back(w);
+    }
+
     return steps;
 }
 
@@ -281,7 +307,8 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildPatrol(std::string const& patrol
     return steps;
 }
 
-std::vector<MyBotsJobStep> MyBotsDirector::BuildStepsForAssign(std::string const& type, std::string const& payload)
+std::vector<MyBotsJobStep> MyBotsDirector::BuildStepsForAssign(std::string const& type, std::string const& payload,
+    Player* player)
 {
     if (type == "move_to")
         return BuildMoveTo(payload);
@@ -291,7 +318,7 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildStepsForAssign(std::string const
         MyBotsExecutor::ParseUInt(payload, "questId", questId);
         if (!questId)
             MyBotsExecutor::ParseUInt(payload, "quest_id", questId);
-        return BuildCompleteQuest(questId, payload);
+        return BuildCompleteQuest(questId, payload, player);
     }
     if (type == "patrol")
     {

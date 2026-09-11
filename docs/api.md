@@ -155,13 +155,12 @@ Body 必含 `type`。可选 `replace`（默认跟 `MyBots.Job.Replace`）。
 
 `giverEntry` / `turninEntry` 可选。不传时模块会从 `creature_queststarter` / `creature_questender`（以及 Playerbots TravelMgr 的任务目的地表）自动解析。
 
-**不传 `steps`、库里也没有 `mybots_quest_script` 时，系统会按任务模板自动生成完整脚本**，大致为：
+**不传 `steps`、库里也没有 `mybots_quest_script` 时，系统会按任务模板和角色当前任务状态自动生成脚本**：
 
 1. `ensure_selfbot`
-2. 有接任务 NPC → `move_to` + `accept_quest`（告示板等 GO 接取则跳过移动，直接 accept）
-3. 每个击杀/掉落目标生物 → `move_to`（去刷新点）
-4. `until`：临时挂上 `+grind`，靠近目标并攻击，直到任务目标完成
-5. `move_to` 交任务 NPC + `turnin_quest`
+2. 尚未接取：有接任务 NPC → `move_to` + `accept_quest`（**已接过则跳过**，避免从暴风城跑回金郡再接一次）
+3. 有击杀/掉落目标：`move_to` 目标 + `until`（对话/交货类任务没有目标，**跳过 until**）
+4. 未交：`move_to` 交任务 NPC + `turnin_quest`
 
 若 body 里带了 `"steps":[...]`，或以 `mybots_quest_script` 手写脚本为准，则不再自动展开。
 

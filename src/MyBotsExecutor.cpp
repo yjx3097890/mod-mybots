@@ -388,16 +388,14 @@ MyBotsStepOutcome MyBotsExecutor::MoveToCreature(Player* player, MyBotsJob& job,
         job.navSpawnEntry = entry;
         job.navSpawnX = sx;
         job.navSpawnY = sy;
-        // Prefer the surface continuous with the player, not a stale/cave spawn Z.
-        float surface = player->GetMapHeight(sx, sy, player->GetPositionZ());
+        // Hint from the spawn's own Z first. Using the player's Z here used to
+        // pick a cave floor at the destination when the character was sunk or
+        // standing in another zone at a different elevation.
+        float surface = player->GetMapHeight(sx, sy, sz);
+        if (surface <= INVALID_HEIGHT)
+            surface = player->GetMapHeight(sx, sy, sz + 5.f);
         if (surface > INVALID_HEIGHT)
             sz = surface;
-        else
-        {
-            surface = player->GetMapHeight(sx, sy, sz);
-            if (surface > INVALID_HEIGHT)
-                sz = surface;
-        }
         job.navSpawnZ = sz;
     }
 
