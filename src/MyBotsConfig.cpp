@@ -24,14 +24,27 @@ void MyBotsConfig::Load(bool reload)
     _jobReplace = sConfigMgr->GetOption<bool>("MyBots.Job.Replace", true);
     _stuckTimeoutSec = sConfigMgr->GetOption<uint32>("MyBots.Executor.StuckTimeoutSec", 45);
     _directorTickMs = sConfigMgr->GetOption<uint32>("MyBots.Director.TickMs", 1000);
+    _navUseTaxi = sConfigMgr->GetOption<bool>("MyBots.Nav.UseTaxi", true);
+    _navTaxiMinDistance = sConfigMgr->GetOption<float>("MyBots.Nav.TaxiMinDistance", 600.f);
+    _navTaxiBoardDistance = sConfigMgr->GetOption<float>("MyBots.Nav.TaxiBoardDistance", 12.f);
+    _navTaxiRetrySec = sConfigMgr->GetOption<uint32>("MyBots.Nav.TaxiRetrySec", 120);
+    _navRepathSec = sConfigMgr->GetOption<uint32>("MyBots.Nav.RepathSec", 5);
+    _navMaxStuckRetries = sConfigMgr->GetOption<uint32>("MyBots.Nav.MaxStuckRetries", 4);
+    _navDetourRadius = sConfigMgr->GetOption<float>("MyBots.Nav.DetourRadius", 10.f);
+    _navDetourSec = sConfigMgr->GetOption<uint32>("MyBots.Nav.DetourSec", 12);
+    _navBadPointRadius = sConfigMgr->GetOption<float>("MyBots.Nav.BadPointRadius", 6.f);
+    _navBadPointTtlSec = sConfigMgr->GetOption<uint32>("MyBots.Nav.BadPointTtlSec", 900);
+    _navUseTravelMgr = sConfigMgr->GetOption<bool>("MyBots.Nav.UseTravelMgr", true);
 
     LOG_INFO("module.mybots",
-        "mod-mybots config loaded (reload={}): enable={} disableRpgQuest={} ignoreMove={} api={}:{} queueMax={}",
+        "mod-mybots config loaded (reload={}): enable={} disableRpgQuest={} ignoreMove={} api={}:{} queueMax={} taxi={} taxiMinDist={}",
         reload ? 1 : 0,
         _enable ? 1 : 0,
         _selfbotDisableRpgQuest ? 1 : 0,
         _selfbotIgnoreClientMovement ? 1 : 0,
         _apiBind,
         _apiPort,
-        _apiQueueMax);
+        _apiQueueMax,
+        _navUseTaxi ? 1 : 0,
+        _navTaxiMinDistance);
 }

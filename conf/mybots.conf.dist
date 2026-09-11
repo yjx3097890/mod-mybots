@@ -81,8 +81,8 @@ MyBots.Api.QueueMax = 64
 # Default / 默认: 1
 MyBots.Job.Replace = 1
 
-# Seconds without meaningful movement before move_to fails as stuck
-# move_to 卡住判定秒数
+# Seconds without meaningful movement before move_to escalates (detour / fail)
+# move_to 卡住判定秒数，超时后触发侧面绕行重试，重试用尽才判失败
 # Default / 默认: 45
 MyBots.Executor.StuckTimeoutSec = 45
 
@@ -90,3 +90,69 @@ MyBots.Executor.StuckTimeoutSec = 45
 # 导演心跳间隔（毫秒）
 # Default / 默认: 1000
 MyBots.Director.TickMs = 1000
+
+###################################################################################################
+#  Navigation / 寻路
+###################################################################################################
+
+# Use flight paths for long trips instead of walking the whole way.
+# Boarding does not require the flight point to be learned, but the taxi fare
+# is still deducted, so a broke character just walks.
+# 远距离优先坐飞行点，而不是全程步行。
+# 上机不要求已学会该飞行点，但仍会扣飞行费；没钱就退回步行。
+# Default / 默认: 1
+MyBots.Nav.UseTaxi = 1
+
+# Minimum straight-line distance (yards) before a flight path is considered
+# 触发飞行点的最小直线距离（码）
+# Default / 默认: 600
+MyBots.Nav.TaxiMinDistance = 600
+
+# Distance (yards) within which the character is considered at the flight point
+# 距离飞行点多近算“已到登机点”（码）
+# Default / 默认: 12
+MyBots.Nav.TaxiBoardDistance = 12
+
+# Seconds to wait before re-evaluating a flight path after it was unusable
+# 判定“本次不适合坐飞行点”后，多少秒再重新评估
+# Default / 默认: 120
+MyBots.Nav.TaxiRetrySec = 120
+
+# Minimum seconds between re-issuing the same destination to the movement
+# generator. Re-pathing every tick causes stutter.
+# 同一目的地重新下发移动指令的最小间隔（秒）。每 tick 重算会导致抽搐。
+# Default / 默认: 5
+MyBots.Nav.RepathSec = 5
+
+# How many detour attempts before move_to gives up
+# 绕行重试次数，用尽后 move_to 判失败
+# Default / 默认: 4
+MyBots.Nav.MaxStuckRetries = 4
+
+# Radius (yards) of the side offset point used when stuck
+# 卡住时侧面偏移点的半径（码）
+# Default / 默认: 10
+MyBots.Nav.DetourRadius = 10
+
+# Seconds a detour point stays the active target
+# 绕行点作为临时目标的持续秒数
+# Default / 默认: 12
+MyBots.Nav.DetourSec = 12
+
+# Radius (yards) within which a recorded bad point blocks a detour candidate
+# 坏点生效半径（码），该范围内不再选为绕行点
+# Default / 默认: 6
+MyBots.Nav.BadPointRadius = 6
+
+# Seconds a bad point is remembered
+# 坏点记忆时长（秒）
+# Default / 默认: 900
+MyBots.Nav.BadPointTtlSec = 900
+
+# Read Playerbots TravelMgr's bad-navmesh grids when validating detour points.
+# Read-only: this module never writes into TravelMgr. Needs a mod-playerbots
+# that exposes isBadMmap, otherwise the integration is compiled out.
+# 校验绕行点时，只读复用 Playerbots TravelMgr 已知的“导航网格坏格”。
+# 本模块不会写入 TravelMgr；若 mod-playerbots 没有该接口则编译期自动关闭。
+# Default / 默认: 1
+MyBots.Nav.UseTravelMgr = 1

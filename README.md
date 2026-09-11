@@ -196,6 +196,15 @@ MyBots.Api.Token = "换成你自己的长随机串"
 
 不带名字则操作自己。带名字可指定在线角色（`MyBots.Selfbot.SelfOnlyInGame = 1` 时，非 GM 只能操作自己）。
 
+不连管理端也能直接试寻路：
+
+```text
+.mybots goto -8895 -133 80      # 下发一个 move_to 作业（会自动先挂 Selfbot），可选第四个参数是到达判定距离
+.mybots nav status              # 当前步骤、执行结果、已记录的坏点数量
+.mybots cancel                  # 取消当前作业
+.mybots nav clear               # 清空坏点记忆（GM）
+```
+
 控制台 / SOAP 用法相同，但必须带角色名，例如：
 
 ```text
@@ -234,7 +243,7 @@ curl -s http://<worldserver容器或主机>:9100/v1/characters/Thralljr/selfbot 
 - 客户端里角色开始由 Playerbots AI 驱动；**请松开键盘**，否则可能橡皮筋。
 - 默认 `MyBots.Selfbot.DisableRpgQuest = 1`：去掉自主任务/旅行策略，**不会**自动接任务跑图；战斗策略保留，可自卫。
 - Selfbot 本身也不像随机机器人那样默认会自己玩。若设 `DisableRpgQuest = 0`，本模块会主动挂上 `+new rpg,+grind,-follow`，才会去磨怪/做任务。改配置后需重启，并重新 `.mybots selfbot off` 再 `on`。
-- 本仓库的任务 Job / 巡逻 / 管理 Web 尚未实现；P0 只验证「能挂/能摘 Selfbot」。
+- 作业、任务、巡逻已实现，走 HTTP API 或 `.mybots goto` 下发；管理 Web 不在本仓库，见 [docs/api.md](docs/api.md)。
 
 ### 快速验收
 
@@ -338,5 +347,11 @@ Authorization: Bearer your-secret
 | `MyBots.Selfbot.SelfOnlyInGame` | 游戏内非 GM 只能操作自己 |
 | `MyBots.Selfbot.DisableRpgQuest` | 开启时去掉自动任务/旅行策略 |
 | `MyBots.Api.*` | HTTP 绑定、端口、Token、超时 |
+| `MyBots.Job.Replace` | 新作业是否抢占旧作业 |
+| `MyBots.Director.TickMs` | 导演心跳间隔 |
+| `MyBots.Executor.StuckTimeoutSec` | 移动卡住判定秒数 |
+| `MyBots.Nav.UseTaxi` / `TaxiMinDistance` | 远距离是否改走飞行点、触发距离 |
+| `MyBots.Nav.MaxStuckRetries` / `DetourRadius` | 卡住后侧面绕行的次数与偏移半径 |
+| `MyBots.Nav.BadPointTtlSec` | 坏点记忆时长 |
 
-作业、任务、巡逻接口属于后续 P1/P2，表结构已建好但尚未使用。
+寻路行为：超过 `TaxiMinDistance` 先走到最近飞行点坐飞机（会扣飞行费，没钱就步行）；卡住时自动侧面绕行并记录坏点，重试用尽才把作业标记为 `stuck` 失败。绕行和坐飞机都会写 `nav` 事件，可在 `GET .../events` 里看到。

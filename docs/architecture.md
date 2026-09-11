@@ -221,7 +221,13 @@ HTN 原语（Executor 只认这些）：
 6. **不要每 tick 重规划**  
    路有效就跟着走。重规划时机：到达、卡住、地图切换、目标作废、操作者取消。
 
-### 6.2 与任务的关系
+### 6.1.1 当前落地（`MyBotsNav` + `MyBotsExecutor::MoveTo`）
+
+- 跟随交给 `MotionMaster::MovePoint`（内部走 MMAP），只在目标变化、移动生成器掉出、或超过 `MyBots.Nav.RepathSec` 时才重下指令。
+- 远路只做了 Taxi 一层：直线距离超过 `MyBots.Nav.TaxiMinDistance` 时，找出发/落地两个 taxi 节点，先走到出发节点再 `ActivateTaxiPathTo`。落地节点必须比自己明显更接近目标（< 60%）才值得飞。传送门与船暂未做，跨地图请拆作业。
+- 卡住后依次：记坏点 → 侧面偏移点（左右扇形，每轮扩大半径，校验地面高度、坏点、LOS）→ 重试次数用尽才 `stuck` 失败。
+- 坏点是本模块自己的带 TTL 列表；同时**只读**查询 Playerbots `TravelMgr::isBadMmap`（导航网格加载失败的格子），不回写。
+- `move_to {"entry":N}` 找不到已加载生物时，回退到 `creature` 表里同地图最近的刷新点坐标，长途才有起点。
 
 巡逻是一种 Job，也可以是任务 `until` 的子步骤（「在这片区域转直到刷到目标」）。导演里巡逻和任务共用 `move_to`，不要两套移动代码。
 
@@ -438,9 +444,12 @@ azerothcore-wotlk/          分支 Playerbot
 
 ### P3.5  寻路增强
 
-- [ ] 远距离：Taxi / 飞行点高层图
-- [ ] 坏点标记、侧面偏移重试
-- [ ] 与 Playerbots TravelMgr 只读复用目的地，不算第二套世界图除非必要
+- [x] 远距离：Taxi / 飞行点高层图（`MyBotsNav::TryTaxi`，先走到飞行点再 `ActivateTaxiPathTo`）
+- [x] 坏点标记、侧面偏移重试（`MyBotsNav::ComputeDetour` + 带 TTL 的坏点表）
+- [x] 与 Playerbots TravelMgr 只读复用目的地，不算第二套世界图除非必要
+      （只读 `isBadMmap`，CMake 探测不到接口时编译期关闭；不写回 TravelMgr）
+- [x] 目标不在网格内时回退到 `creature` 静态刷新点，长途才有起点
+- [x] 不再每 tick 重下移动指令（`MyBots.Nav.RepathSec`），消除抽搐
 
 ### P4  LLM 规划（明确后置）
 

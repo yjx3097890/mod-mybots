@@ -1,6 +1,7 @@
 #include "MyBotsExecutor.h"
 #include "MyBotsConfig.h"
 #include "MyBotsJob.h"
+#include "MyBotsNav.h"
 #include "MyBotsSelfbot.h"
 #include "MyBotsUtil.h"
 
@@ -27,6 +28,67 @@ bool TryDoAction(PlayerbotAI* ai, std::string const& name)
 Creature* FindNearestCreature(Player* player, uint32 entry, float range)
 {
     return player ? player->FindNearestCreature(entry, range, true) : nullptr;
+}
+
+// Grid search only sees loaded creatures. For anything further away we fall
+// back to the static spawn table so a long trip can at least be started.
+bool FindNearestSpawnPoint(Player* player, uint32 entry, float& x, float& y, float& z)
+{
+    if (!player || !entry)
+        return false;
+
+    uint16 const mapId = uint16(player->GetMapId());
+    float best = -1.f;
+
+    for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
+    {
+        if (data.mapid != mapId || data.id != entry)
+            continue;
+
+        float const d = player->GetExactDist2d(data.posX, data.posY);
+        if (best < 0.f || d < best)
+        {
+            best = d;
+            x = data.posX;
+            y = data.posY;
+            z = data.posZ;
+        }
+    }
+
+    return best >= 0.f;
+}
+
+void ResetNavState(MyBotsJob& job)
+{
+    job.stuckSince = 0;
+    job.navAttempts = 0;
+    job.detourUntil = 0;
+    job.moveIssuedAt = 0;
+    job.taxiInProgress = false;
+}
+
+// Clearing the motion master every tick restarts pathfinding and makes the
+// character stutter, so only re-issue when the target moved, the generator
+// dropped out, or the re-path interval elapsed.
+void IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool force)
+{
+    uint32 const now = MyBotsNow();
+    bool const sameTarget = std::fabs(job.moveTargetX - x) < 1.f
+        && std::fabs(job.moveTargetY - y) < 1.f
+        && std::fabs(job.moveTargetZ - z) < 1.f;
+    bool const driving = player->GetMotionMaster()->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE;
+
+    if (!force && sameTarget && driving && job.moveIssuedAt
+        && now - job.moveIssuedAt < sMyBotsConfig.NavRepathSec())
+        return;
+
+    job.moveTargetX = x;
+    job.moveTargetY = y;
+    job.moveTargetZ = z;
+    job.moveIssuedAt = now;
+
+    player->GetMotionMaster()->Clear();
+    player->GetMotionMaster()->MovePoint(1, x, y, z);
 }
 } // namespace
 
@@ -113,11 +175,29 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
         return o;
     }
 
-    float const d = player->GetDistance(x, y, z);
-    if (d <= dist)
+    uint32 const now = MyBotsNow();
+
+    // A taxi flight owns movement until the character lands.
+    if (player->IsInFlight())
+    {
+        job.stuckSince = 0;
+        job.taxiInProgress = true;
+        o.result = MyBotsStepResult::Running;
+        o.detail = "in_flight";
+        return o;
+    }
+
+    if (job.taxiInProgress)
+    {
+        job.taxiInProgress = false;
+        job.stuckSince = 0;
+        job.moveIssuedAt = 0;
+    }
+
+    if (player->GetDistance(x, y, z) <= dist)
     {
         player->StopMoving();
-        job.stuckSince = 0;
+        ResetNavState(job);
         o.result = MyBotsStepResult::Done;
         o.detail = "arrived";
         return o;
@@ -125,6 +205,12 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
 
     if (player->IsInCombat())
     {
+        // Combat generators own movement here, so standing still is not "stuck".
+        job.stuckSince = 0;
+        job.moveIssuedAt = 0;
+        job.lastX = player->GetPositionX();
+        job.lastY = player->GetPositionY();
+        job.lastZ = player->GetPositionZ();
         o.result = MyBotsStepResult::Running;
         o.detail = "in_combat";
         return o;
@@ -133,17 +219,10 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
     float const moved = std::fabs(player->GetPositionX() - job.lastX)
         + std::fabs(player->GetPositionY() - job.lastY)
         + std::fabs(player->GetPositionZ() - job.lastZ);
-    uint32 const now = MyBotsNow();
     if (moved < 0.4f)
     {
         if (!job.stuckSince)
             job.stuckSince = now;
-        else if (now - job.stuckSince >= sMyBotsConfig.StuckTimeoutSec())
-        {
-            o.result = MyBotsStepResult::Failed;
-            o.detail = "stuck";
-            return o;
-        }
     }
     else
         job.stuckSince = 0;
@@ -152,11 +231,85 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
     job.lastY = player->GetPositionY();
     job.lastZ = player->GetPositionZ();
 
-    if (PlayerbotAI* ai = GET_PLAYERBOT_AI(player))
-        TryDoAction(ai, "move to position");
+    bool const stuck = job.stuckSince && now - job.stuckSince >= sMyBotsConfig.StuckTimeoutSec();
 
-    player->GetMotionMaster()->Clear();
-    player->GetMotionMaster()->MovePoint(1, x, y, z);
+    // Finish the current side offset before aiming at the real target again.
+    if (job.detourUntil)
+    {
+        if (now >= job.detourUntil || player->GetDistance(job.detourX, job.detourY, job.detourZ) <= 3.f)
+        {
+            job.detourUntil = 0;
+            job.stuckSince = 0;
+            job.moveIssuedAt = 0;
+        }
+        else if (!stuck)
+        {
+            IssueMove(player, job, job.detourX, job.detourY, job.detourZ, false);
+            o.result = MyBotsStepResult::Running;
+            o.detail = "detour";
+            return o;
+        }
+    }
+
+    if (stuck)
+    {
+        job.stuckSince = 0;
+        job.detourUntil = 0;
+        ++job.navAttempts;
+        MyBotsNav::MarkBadPoint(player, player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+
+        if (job.navAttempts > sMyBotsConfig.NavMaxStuckRetries())
+        {
+            player->StopMoving();
+            o.result = MyBotsStepResult::Failed;
+            o.detail = "stuck";
+            return o;
+        }
+
+        float dx = 0.f, dy = 0.f, dz = 0.f;
+        if (MyBotsNav::ComputeDetour(player, x, y, z, job.navAttempts, dx, dy, dz))
+        {
+            job.detourX = dx;
+            job.detourY = dy;
+            job.detourZ = dz;
+            job.detourUntil = now + sMyBotsConfig.NavDetourSec();
+            IssueMove(player, job, dx, dy, dz, true);
+            o.result = MyBotsStepResult::Running;
+            o.detail = "detour_retry";
+            return o;
+        }
+
+        IssueMove(player, job, x, y, z, true);
+        o.result = MyBotsStepResult::Running;
+        o.detail = "repath";
+        return o;
+    }
+
+    // Long hops: let a flight path cover the continent instead of the navmesh.
+    if (now >= job.taxiRetryAt && MyBotsNav::ShouldUseTaxi(player, x, y, z))
+    {
+        float bx = 0.f, by = 0.f, bz = 0.f;
+        std::string taxiDetail;
+        switch (MyBotsNav::TryTaxi(player, x, y, z, bx, by, bz, taxiDetail))
+        {
+            case MyBotsTaxiResult::Boarded:
+                job.taxiInProgress = true;
+                job.moveIssuedAt = 0;
+                o.result = MyBotsStepResult::Running;
+                o.detail = taxiDetail;
+                return o;
+            case MyBotsTaxiResult::Approaching:
+                IssueMove(player, job, bx, by, bz, false);
+                o.result = MyBotsStepResult::Running;
+                o.detail = taxiDetail;
+                return o;
+            case MyBotsTaxiResult::Unavailable:
+                job.taxiRetryAt = now + sMyBotsConfig.NavTaxiRetrySec();
+                break;
+        }
+    }
+
+    IssueMove(player, job, x, y, z, false);
     o.result = MyBotsStepResult::Running;
     o.detail = "moving";
     return o;
@@ -164,15 +317,31 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
 
 MyBotsStepOutcome MyBotsExecutor::MoveToCreature(Player* player, MyBotsJob& job, uint32 entry, float dist)
 {
-    Creature* c = FindNearestCreature(player, entry, 120.f);
-    if (!c)
+    if (Creature* c = FindNearestCreature(player, entry, 120.f))
     {
-        MyBotsStepOutcome o;
-        o.result = MyBotsStepResult::Failed;
-        o.detail = "creature_not_found";
-        return o;
+        job.navSpawnEntry = 0;
+        return MoveTo(player, job, c->GetPositionX(), c->GetPositionY(), c->GetPositionZ(), dist);
     }
-    return MoveTo(player, job, c->GetPositionX(), c->GetPositionY(), c->GetPositionZ(), dist);
+
+    // Out of grid range: head for the spawn point so the taxi/long-distance
+    // layer can do its work instead of failing the step outright.
+    if (job.navSpawnEntry != entry)
+    {
+        float sx = 0.f, sy = 0.f, sz = 0.f;
+        if (!FindNearestSpawnPoint(player, entry, sx, sy, sz))
+        {
+            MyBotsStepOutcome o;
+            o.result = MyBotsStepResult::Failed;
+            o.detail = "creature_not_found";
+            return o;
+        }
+        job.navSpawnEntry = entry;
+        job.navSpawnX = sx;
+        job.navSpawnY = sy;
+        job.navSpawnZ = sz;
+    }
+
+    return MoveTo(player, job, job.navSpawnX, job.navSpawnY, job.navSpawnZ, dist);
 }
 
 MyBotsStepOutcome MyBotsExecutor::Interact(Player* player, uint32 entry)

@@ -29,6 +29,18 @@ public:
     uint32 StuckTimeoutSec() const { return _stuckTimeoutSec; }
     uint32 DirectorTickMs() const { return _directorTickMs; }
 
+    bool NavUseTaxi() const { return _navUseTaxi; }
+    float NavTaxiMinDistance() const { return _navTaxiMinDistance; }
+    float NavTaxiBoardDistance() const { return _navTaxiBoardDistance; }
+    uint32 NavTaxiRetrySec() const { return _navTaxiRetrySec; }
+    uint32 NavRepathSec() const { return _navRepathSec; }
+    uint32 NavMaxStuckRetries() const { return _navMaxStuckRetries; }
+    float NavDetourRadius() const { return _navDetourRadius; }
+    uint32 NavDetourSec() const { return _navDetourSec; }
+    float NavBadPointRadius() const { return _navBadPointRadius; }
+    uint32 NavBadPointTtlSec() const { return _navBadPointTtlSec; }
+    bool NavUseTravelMgr() const { return _navUseTravelMgr; }
+
 private:
     MyBotsConfig() = default;
 
@@ -46,6 +58,17 @@ private:
     bool _jobReplace = true;
     uint32 _stuckTimeoutSec = 45;
     uint32 _directorTickMs = 1000;
+    bool _navUseTaxi = true;
+    float _navTaxiMinDistance = 600.f;
+    float _navTaxiBoardDistance = 12.f;
+    uint32 _navTaxiRetrySec = 120;
+    uint32 _navRepathSec = 5;
+    uint32 _navMaxStuckRetries = 4;
+    float _navDetourRadius = 10.f;
+    uint32 _navDetourSec = 12;
+    float _navBadPointRadius = 6.f;
+    uint32 _navBadPointTtlSec = 900;
+    bool _navUseTravelMgr = true;
 };
 
 #define sMyBotsConfig MyBotsConfig::Instance()

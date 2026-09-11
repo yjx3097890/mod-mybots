@@ -85,6 +85,8 @@ Body 必含 `type`。可选 `replace`（默认跟 `MyBots.Job.Replace`）。
 {"type":"move_to","entry":197}
 ```
 
+寻路说明：目标不在附近网格时，会退回到该 entry 在当前地图上最近的静态刷新点作为目的地。直线距离超过 `MyBots.Nav.TaxiMinDistance`（默认 600 码）时，先走到最近飞行点再走飞行路线，落地后继续步行；卡住会自动侧面绕行，重试次数用尽才以 `stuck` 判失败。跨地图不会自动处理，请自行拆成多个作业。
+
 #### `complete_quest`
 
 ```json
@@ -147,6 +149,8 @@ Body 必含 `type`。可选 `replace`（默认跟 `MyBots.Job.Replace`）。
 
 单作业详情（含 steps / status / error）。
 
+每个 step 有两个字符串字段：`detail` 是创建作业时的参数，不会变；`result` 是执行器上一次的返回，用来看进度，取值如 `moving`、`in_combat`、`detour`、`taxi_approach`、`in_flight`、`arrived`。
+
 ### `POST /v1/characters/{id}/jobs/{jobId}/pause`
 
 暂停。
@@ -178,6 +182,8 @@ Body 必含 `type`。可选 `replace`（默认跟 `MyBots.Job.Replace`）。
 }
 ```
 
+`kind` 取值：`job_created`、`job_running`、`job_succeeded`、`job_failed`、`job_cancelled`、`patrol_resume`、`patrol_loop`，以及寻路升级事件 `nav`（`message` 为 `detour_retry` / `repath` / `taxi_approach` / `taxi_boarded` / `taxi_no_money`）。走得慢时先看 `nav` 事件，能区分是在绕障碍还是在赶飞行点。
+
 ---
 
 ## 巡逻定义
@@ -205,7 +211,7 @@ Body 必含 `type`。可选 `replace`（默认跟 `MyBots.Job.Replace`）。
 | op | detail 示例 | 说明 |
 |---|---|---|
 | `ensure_selfbot` | `{}` | 确保已挂 Selfbot |
-| `move_to` | `{"x":..,"y":..,"z":..}` 或 `{"entry":197}` | 移动 + 卡住检测 |
+| `move_to` | `{"x":..,"y":..,"z":..}` 或 `{"entry":197}` | 移动：远距离走飞行点，卡住则绕行重试 |
 | `interact` | `{"entry":197}` | 与 NPC 交互 |
 | `gossip_select` | `{"entry":197,"menu":0,"option":0}` | 选择 gossip |
 | `accept_quest` | `{"questId":7,"entry":197}` | 接任务 |

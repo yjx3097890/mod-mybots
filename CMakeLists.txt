@@ -61,3 +61,21 @@ else()
 endif()
 
 message(STATUS "mod-mybots: using playerbots at ${MYBOTS_PLAYERBOTS_DIR}")
+
+# Optional read-only reuse of playerbots' bad-navmesh knowledge. Only enabled
+# when the installed fork actually exposes the accessors we call, so an older
+# or patched mod-playerbots still compiles.
+set(MYBOTS_TRAVELMGR_HEADER "${MYBOTS_PLAYERBOTS_DIR}/src/Mgr/Travel/TravelMgr.h")
+if(EXISTS "${MYBOTS_TRAVELMGR_HEADER}")
+  file(READ "${MYBOTS_TRAVELMGR_HEADER}" MYBOTS_TRAVELMGR_SRC)
+  string(FIND "${MYBOTS_TRAVELMGR_SRC}" "isBadMmap" MYBOTS_TM_HAS_BADMMAP)
+  string(FIND "${MYBOTS_TRAVELMGR_SRC}" "define sTravelMgr" MYBOTS_TM_HAS_MACRO)
+  if(NOT MYBOTS_TM_HAS_BADMMAP EQUAL -1 AND NOT MYBOTS_TM_HAS_MACRO EQUAL -1)
+    add_definitions(-DMYBOTS_HAVE_TRAVELMGR)
+    message(STATUS "mod-mybots: TravelMgr bad-grid reuse enabled")
+  else()
+    message(STATUS "mod-mybots: TravelMgr found but API mismatch, bad-grid reuse disabled")
+  endif()
+else()
+  message(STATUS "mod-mybots: TravelMgr.h not found, bad-grid reuse disabled")
+endif()

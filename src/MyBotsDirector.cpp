@@ -300,7 +300,8 @@ std::string MyBotsDirector::JobToJson(MyBotsJob const& job)
         ss << "{\"ordinal\":" << s.ordinal
            << ",\"op\":\"" << MyBotsJsonEscapeCopy(s.op) << "\""
            << ",\"status\":\"" << MyBotsJobStatusName(s.status) << "\""
-           << ",\"detail\":\"" << MyBotsJsonEscapeCopy(s.detail) << "\"}";
+           << ",\"detail\":\"" << MyBotsJsonEscapeCopy(s.detail) << "\""
+           << ",\"result\":\"" << MyBotsJsonEscapeCopy(s.result) << "\"}";
     }
     ss << "]}";
     return ss.str();
@@ -369,7 +370,15 @@ void MyBotsDirector::TickJob(MyBotsJob& job)
     MyBotsJobStep& step = job.steps[static_cast<size_t>(job.stepIndex)];
     step.status = MyBotsJobStatus::Running;
     auto outcome = MyBotsExecutor::RunStep(player, job, step.op, step.detail);
-    step.detail = outcome.detail;
+
+    // Surface navigation escalations once each, so the management side can see
+    // why a move is taking long instead of only seeing "running".
+    if (outcome.detail != step.result
+        && (outcome.detail == "detour_retry" || outcome.detail == "repath"
+            || outcome.detail.rfind("taxi_", 0) == 0))
+        sMyBotsJobStore.AppendEvent(job.charGuid, job.id, "nav", outcome.detail);
+
+    step.result = outcome.detail;
 
     if (outcome.result == MyBotsStepResult::Done)
     {
@@ -377,6 +386,10 @@ void MyBotsDirector::TickJob(MyBotsJob& job)
         job.stepIndex++;
         job.stuckSince = 0;
         job.waitUntil = 0;
+        job.navAttempts = 0;
+        job.detourUntil = 0;
+        job.moveIssuedAt = 0;
+        job.taxiRetryAt = 0;
         sMyBotsJobStore.Save(job);
     }
     else if (outcome.result == MyBotsStepResult::Failed)

@@ -50,7 +50,10 @@ struct MyBotsJobStep
     int ordinal = 0;
     std::string op;
     MyBotsJobStatus status = MyBotsJobStatus::Queued;
+    // Arguments the step was created with; must survive re-ticking.
     std::string detail;
+    // Last outcome reported by the executor, runtime only.
+    std::string result;
     uint32 retries = 0;
 };
 
@@ -75,6 +78,23 @@ struct MyBotsJob
     uint32 waitUntil = 0;
     bool combatSuspended = false;
     int patrolIndex = 0;
+    // Navigation runtime: issued destination, detour and taxi bookkeeping.
+    float moveTargetX = 0.f;
+    float moveTargetY = 0.f;
+    float moveTargetZ = 0.f;
+    uint32 moveIssuedAt = 0;
+    uint32 navAttempts = 0;
+    uint32 detourUntil = 0;
+    float detourX = 0.f;
+    float detourY = 0.f;
+    float detourZ = 0.f;
+    uint32 taxiRetryAt = 0;
+    bool taxiInProgress = false;
+    // Cached spawn position for move_to by creature entry.
+    uint32 navSpawnEntry = 0;
+    float navSpawnX = 0.f;
+    float navSpawnY = 0.f;
+    float navSpawnZ = 0.f;
 };
 
 struct MyBotsPatrol
