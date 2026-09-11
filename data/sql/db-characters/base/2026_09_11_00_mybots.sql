@@ -1,5 +1,6 @@
--- Duplicate path used by some AzerothCore db assemblers.
--- Keep in sync with data/sql/characters/base/2026_09_11_00_mybots.sql
+-- mod-mybots schema for acore_characters.
+-- Applied automatically by AzerothCore DB Updater / ac-db-import
+-- (modules/mod-mybots/data/sql/db-characters/). Jobs unused until P1/P2.
 CREATE TABLE IF NOT EXISTS `mybots_job` (
   `id` CHAR(36) NOT NULL,
   `char_guid` INT UNSIGNED NOT NULL,

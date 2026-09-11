@@ -17,41 +17,233 @@ azerothcore-wotlk/modules/
   mod-mybots/         # 本仓库，目录名必须是 mod-mybots
 ```
 
-`playerbots.conf` 中需要 `AiPlayerbot.Enabled = 1`。Selfbot 权限仍建议 `AiPlayerbot.SelfBotLevel = 2`（本模块会直接挂 AI，但 Playerbots 总开关必须开）。
+## 安装后怎么用
 
-## 配置
+按顺序做完下面步骤，才能在游戏里或通过 API 托管角色。
 
-与 `playerbots.conf` 同目录。Docker 部署时复制为：
+**先分清：重编 vs 重启**
 
-```text
-azerothcore-wotlk/docker/vol/etc/modules/mybots.conf
+| 你改了什么 | 要做什么 |
+|---|---|
+| 第一次放入 `mod-mybots`，或改了 `.cpp` / `.h` / `CMakeLists.txt` | **必须重新编译**，再启动 worldserver |
+| 只改 `mybots.conf` / `playerbots.conf` | **只需重启** worldserver，不用重编 |
+
+模块是静态编进 `worldserver` 的，不是热加载；只重启装不上新模块。
+
+### 1. 放入模块并重新编译
+
+在 `azerothcore-wotlk` 根目录：
+
+```bash
+cd modules
+git clone https://github.com/yjx3097890/mod-mybots.git mod-mybots
+# 或已有目录：cd mod-mybots && git pull
+cd ..
 ```
 
-对应关系：
+目录必须是 `modules/mod-mybots`，与 `mod-playerbots` 并列：
 
 ```text
-azerothcore-wotlk/docker/vol/etc/modules/
-  playerbots.conf   # 官方 mod-playerbots
-  mybots.conf       # 本模块（由 conf/mybots.conf.dist 复制并改名）
+azerothcore-wotlk/modules/
+  mod-playerbots/
+  mod-mybots/
 ```
+
+#### Docker（推荐，与你当前部署一致）
+
+在 `azerothcore-wotlk` 根目录**重建并启动**（首次装模块或改了源码都走这一步）：
+
+```bash
+docker compose up -d --build
+```
+
+若你平时只重建 world 服务：
+
+```bash
+docker compose build ac-worldserver
+docker compose up -d ac-worldserver
+```
+
+编译很慢是正常的（往往十几分钟到几十分钟）。`--build` 才会把 `mod-mybots` 编进镜像；只 `docker compose restart` **不够**。
+
+#### 数据库表（自动创建）
+
+本模块把表建在 **`acore_characters`**（不是独立库）。SQL 路径与官方模块一致：
+
+```text
+modules/mod-mybots/data/sql/db-characters/base/2026_09_11_00_mybots.sql
+```
+
+会建：`mybots_job`、`mybots_job_step`、`mybots_quest_script`、`mybots_patrol`、`mybots_event`。
+
+| 部署 | 谁自动执行 |
+|---|---|
+| Docker | **`ac-db-import`**（worldserver 容器通常关掉了主库 Updates） |
+| 源码 | worldserver 启动时的 DB Updater |
+
+要让 Docker 自动进模块 SQL，确认 `dbimport.conf`（或生成物）里：
+
+```ini
+Updates.EnableDatabases = 7
+Updates.AllowedModules = "all"
+```
+
+（`"all"` 也可写成包含 `mod-mybots`。若 `AllowedModules` 为空，模块 SQL **不会**跑。）
+
+装上本模块后需要 **重建并跑一次** `ac-db-import`（`docker compose up -d --build` 即可）。日志里应出现 Applying `2026_09_11_00_mybots.sql`；库中可用：
+
+```sql
+SHOW TABLES LIKE 'mybots_%';
+```
+
+说明：Playerbots 的 `acore_playerbots` 是它自己的 `Playerbots.Updates` 管的；本模块走 AzerothCore **标准模块 SQL**，机制不同，但效果一样——启动/dbimport 后自动建表。
+
+P0 启停 Selfbot **还不读写**这些表；缺表也能先测命令/API。后续 Job/巡逻会用到。
+
+若自动导入失败，可临时手动：
+
+```bash
+docker exec -i ac-database mysql -uacore -p acore_characters \
+  < modules/mod-mybots/data/sql/db-characters/base/2026_09_11_00_mybots.sql
+```
+
+#### 源码编译（非 Docker）
+
+在已有 Playerbot 核心的 `build` 目录：
+
+```bash
+cd build
+# 新增模块后建议重新 cmake，再编译安装
+cmake .. -DCMAKE_INSTALL_PREFIX=../env/dist -DSCRIPTS=static -DMODULES=static
+make -j$(nproc)
+make install
+```
+
+macOS 可把 `$(nproc)` 换成 `$(sysctl -n hw.ncpu)`。也可用 AzerothCore 脚本：
+
+```bash
+./acore.sh compiler build
+```
+
+装好后启动 `authserver` / `worldserver`（或你现有的启动方式）。
+
+编译成功的标志：worldserver 启动日志出现 `module.mybots` 相关输出；游戏内输入 `.mybots status` 有响应（而不是未知命令）。
+
+### 2. 配置 Playerbots（必做）
+
+编辑与 `mybots.conf` 同目录的 `playerbots.conf`：
+
+```text
+azerothcore-wotlk/docker/vol/etc/modules/playerbots.conf
+```
+
+至少保证：
+
+```ini
+AiPlayerbot.Enabled = 1
+AiPlayerbot.SelfBotLevel = 2
+```
+
+`Enabled = 0` 时本模块无法挂 AI。`SelfBotLevel = 2` 允许普通玩家也能用官方 Selfbot；本模块 API/命令会直接挂 AI，但仍依赖总开关打开。
+
+### 3. 配置本模块
 
 ```bash
 cp modules/mod-mybots/conf/mybots.conf.dist docker/vol/etc/modules/mybots.conf
 ```
 
-至少改掉默认 token；Docker 网桥互通时建议 `Bind = "0.0.0.0"`：
+得到：
 
-```ini
-MyBots.Api.Bind = "0.0.0.0"
-MyBots.Api.Port = 9100
-MyBots.Api.Token = "your-secret"
+```text
+azerothcore-wotlk/docker/vol/etc/modules/
+  playerbots.conf
+  mybots.conf
 ```
 
-**部署前提：worldserver 与管理系统后端都跑在 Docker 里**（同机 Docker Compose / 同一 Docker 网络即可）。模块 API 只给管理容器用，不要把 9100 映射到公网。
+打开 `mybots.conf`，至少改这些：
 
-同网桥时绑 `0.0.0.0`，由 Docker 网络隔离；若用 `network_mode: host` 或只本容器访问，再绑 `127.0.0.1`。
+```ini
+MyBots.Enable = 1
+MyBots.Selfbot.Allow = 1
 
-## JSON API（给管理系统后端）
+# Docker 网桥互通用 0.0.0.0；host 网络或本容器自测可用 127.0.0.1
+MyBots.Api.Enable = 1
+MyBots.Api.Bind = "0.0.0.0"
+MyBots.Api.Port = 9100
+MyBots.Api.Token = "换成你自己的长随机串"
+```
+
+- Token 不能留空，也不能继续用默认的 `change-me`（否则 API 会拒绝启动/请求）。
+- **不要把 9100 映射到公网**；只给同 Docker 网络里的管理后端用。
+- **只改了 conf：重启 worldserver 即可**（Docker：`docker compose restart ac-worldserver`）。不要为此再 `--build`。
+- 若改完 conf 仍像没生效，确认改的是 `docker/vol/etc/modules/mybots.conf`（运行时配置），不是仓库里的 `conf/mybots.conf.dist`。
+
+启动日志里应能看到本模块相关输出（通道 `module.mybots`）。`mybots_*` 表由 `ac-db-import` / worldserver Updater 按上一节自动创建。
+
+### 4. 登录角色并开启托管
+
+角色必须**在线、已进入世界**。两种方式任选其一。
+
+**方式 A：游戏内命令（不连管理端也能用）**
+
+聊天框输入：
+
+```text
+.mybots selfbot on
+.mybots status
+.mybots selfbot off
+```
+
+不带名字则操作自己。带名字可指定在线角色（`MyBots.Selfbot.SelfOnlyInGame = 1` 时，非 GM 只能操作自己）。
+
+控制台 / SOAP 用法相同，但必须带角色名，例如：
+
+```text
+.mybots selfbot on Thralljr
+```
+
+**方式 B：HTTP API（给管理后端）**
+
+角色在线后：
+
+```bash
+# 探活（无需 token）
+curl -s http://<worldserver容器或主机>:9100/health
+
+# 开启托管
+curl -s http://<worldserver容器或主机>:9100/v1/characters/Thralljr/selfbot \
+  -H "Authorization: Bearer 你的Token" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled":true}'
+
+# 查快照
+curl -s http://<worldserver容器或主机>:9100/v1/characters/Thralljr \
+  -H "Authorization: Bearer 你的Token"
+
+# 关闭托管
+curl -s http://<worldserver容器或主机>:9100/v1/characters/Thralljr/selfbot \
+  -H "Authorization: Bearer 你的Token" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled":false}'
+```
+
+也可用请求头 `X-MyBots-Token: 你的Token`。
+
+### 5. 开启后你会看到什么
+
+- 客户端里角色开始由 Playerbots AI 驱动；**请松开键盘**，否则可能橡皮筋。
+- 默认会去掉 `rpg quest` / `travel` / `rpg` 非战斗策略（`MyBots.Selfbot.DisableRpgQuest = 1`），**不会**自动接任务跑图；战斗策略保留，可自卫。
+- 若想先体验官方自动做任务，把 `DisableRpgQuest` 设为 `0` 后重启再开托管。
+- 本仓库的任务 Job / 巡逻 / 管理 Web 尚未实现；P0 只验证「能挂/能摘 Selfbot」。
+
+### 快速验收
+
+1. 模块与 `mod-playerbots` 一起编进 worldserver 并成功启动  
+2. 登录角色，`.mybots selfbot on` 或 `POST .../selfbot`，角色开始自行行动  
+3. `.mybots status` 或 `GET /v1/characters/Name` 里 `selfbot` 为 true  
+4. `off` / `enabled:false` 后停止托管  
+
+## JSON API 参考
 
 所有写操作和角色查询都要带：
 
@@ -108,32 +300,16 @@ Authorization: Bearer your-secret
 
 成功时 `200`，角色不在线 `409`，token 错误 `401`。
 
-```bash
-curl -s http://127.0.0.1:9100/v1/characters/Thralljr/selfbot \
-  -H "Authorization: Bearer your-secret" \
-  -H "Content-Type: application/json" \
-  -d '{"enabled":true}'
-```
+## 配置项摘要
 
-## 游戏内 / SOAP 命令
+详见 `conf/mybots.conf.dist`（中英备注）。常用项：
 
-控制台和 SOAP 也可调用（若你的后台已经在用 AC SOAP）：
-
-```text
-.mybots status Name
-.mybots selfbot on Name
-.mybots selfbot off Name
-```
-
-游戏内不带名字则操作自己。`MyBots.Selfbot.SelfOnlyInGame = 1` 时，非 GM 不能指定别人。
-
-开启后会去掉该角色的 `rpg quest` / `travel` / `rpg` 非战斗策略，避免官方 RPG 抢控制；战斗策略保留。操作者应松开键盘，否则可能橡皮筋。
-
-## P0 验收
-
-1. 模块与 `mod-playerbots` 一起编进 worldserver
-2. 登录角色，`POST selfbot enabled:true`，客户端能看到角色开始自行行动
-3. `GET /v1/characters/Name` 里 `selfbot` 为 true
-4. `enabled:false` 后停止托管
+| 配置 | 作用 |
+|---|---|
+| `MyBots.Enable` | 总开关 |
+| `MyBots.Selfbot.Allow` | 是否允许挂 Selfbot |
+| `MyBots.Selfbot.SelfOnlyInGame` | 游戏内非 GM 只能操作自己 |
+| `MyBots.Selfbot.DisableRpgQuest` | 开启时去掉自动任务/旅行策略 |
+| `MyBots.Api.*` | HTTP 绑定、端口、Token、超时 |
 
 作业、任务、巡逻接口属于后续 P1/P2，表结构已建好但尚未使用。

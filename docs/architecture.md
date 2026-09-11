@@ -383,7 +383,7 @@ azerothcore-wotlk/          分支 Playerbot
 
 - [x] 确认运行环境：Playerbot 核心 + 官方 `mod-playerbots`，本模块空壳能编译进 worldserver
 - [x] `CMakeLists.txt`、`mybots.conf.dist`、脚本加载器，不与 Playerbots 符号/命令冲突
-- [x] 建 `mybots_*` 表并随 worldserver 自动导入（表已就绪，C++ 尚未读写）
+- [x] 建 `mybots_*` 表并随 worldserver / `ac-db-import` 自动导入（仅保留 `data/sql/db-characters/`；C++ 尚未读写）
 - [x] 定位 `GET_PLAYERBOT_AI`、`ChangeStrategy`、世界线程投递接口（`DoSpecificAction` 待执行器阶段再用）
 - [x] 日志通道 `mybots`，与 `playerbots` 分开
 
