@@ -232,8 +232,8 @@ curl -s http://<worldserver容器或主机>:9100/v1/characters/Thralljr/selfbot 
 ### 5. 开启后你会看到什么
 
 - 客户端里角色开始由 Playerbots AI 驱动；**请松开键盘**，否则可能橡皮筋。
-- 默认会去掉 `rpg quest` / `travel` / `rpg` 非战斗策略（`MyBots.Selfbot.DisableRpgQuest = 1`），**不会**自动接任务跑图；战斗策略保留，可自卫。
-- 若想先体验官方自动做任务，把 `DisableRpgQuest` 设为 `0` 后重启再开托管。
+- 默认 `MyBots.Selfbot.DisableRpgQuest = 1`：去掉自主任务/旅行策略，**不会**自动接任务跑图；战斗策略保留，可自卫。
+- Selfbot 本身也不像随机机器人那样默认会自己玩。若设 `DisableRpgQuest = 0`，本模块会主动挂上 `+new rpg,+grind,-follow`，才会去磨怪/做任务。改配置后需重启，并重新 `.mybots selfbot off` 再 `on`。
 - 本仓库的任务 Job / 巡逻 / 管理 Web 尚未实现；P0 只验证「能挂/能摘 Selfbot」。
 
 ### 快速验收

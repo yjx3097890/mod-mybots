@@ -20,6 +20,11 @@ void MyBotsConfig::Load(bool reload)
     _apiToken = sConfigMgr->GetOption<std::string>("MyBots.Api.Token", "change-me");
     _apiTimeoutMs = sConfigMgr->GetOption<uint32>("MyBots.Api.TimeoutMs", 3000);
 
-    LOG_INFO("module.mybots", "mod-mybots config loaded (reload={}): enable={} api={}:{}",
-        reload ? 1 : 0, _enable ? 1 : 0, _apiBind, _apiPort);
+    LOG_INFO("module.mybots", "mod-mybots config loaded (reload={}): enable={} selfbotAllow={} disableRpgQuest={} api={}:{}",
+        reload ? 1 : 0,
+        _enable ? 1 : 0,
+        _selfbotAllow ? 1 : 0,
+        _selfbotDisableRpgQuest ? 1 : 0,
+        _apiBind,
+        _apiPort);
 }

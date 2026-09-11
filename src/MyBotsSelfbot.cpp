@@ -52,11 +52,19 @@ void JsonEscape(std::string const& in, std::string& out)
 
 void DisableAutonomousQuesting(PlayerbotAI* ai)
 {
-    if (!ai || !sMyBotsConfig.SelfbotDisableRpgQuest())
+    if (!ai)
         return;
 
-    // Drop Playerbots' own quest/travel brain so this module can direct later.
-    ai->ChangeStrategy("-rpg quest,-travel,-rpg", BOT_STATE_NON_COMBAT);
+    // Alt/self bots do not auto-quest like random bots unless these strategies are on.
+    // DisableRpgQuest=1: strip them so this module can direct later.
+    // DisableRpgQuest=0: explicitly enable official autonomous play for P0 testing.
+    if (sMyBotsConfig.SelfbotDisableRpgQuest())
+    {
+        ai->ChangeStrategy("-rpg quest,-travel,-rpg,-new rpg,-grind", BOT_STATE_NON_COMBAT);
+        return;
+    }
+
+    ai->ChangeStrategy("+new rpg,+grind,-follow", BOT_STATE_NON_COMBAT);
 }
 } // namespace
 
@@ -78,7 +86,9 @@ MyBotsResult MyBotsSelfbot::Enable(Player* player)
     {
         existing->SetMaster(player);
         DisableAutonomousQuesting(existing);
-        LOG_INFO("module.mybots", "Selfbot already active for {}", player->GetName());
+        LOG_INFO("module.mybots", "Selfbot already active for {} disableRpgQuest={}",
+            player->GetName(),
+            sMyBotsConfig.SelfbotDisableRpgQuest() ? 1 : 0);
         return Ok("already_on", "Selfbot already enabled");
     }
 
@@ -90,7 +100,10 @@ MyBotsResult MyBotsSelfbot::Enable(Player* player)
     ai->SetMaster(player);
     DisableAutonomousQuesting(ai);
 
-    LOG_INFO("module.mybots", "Selfbot enabled for {} guid={}", player->GetName(), player->GetGUID().GetCounter());
+    LOG_INFO("module.mybots", "Selfbot enabled for {} guid={} disableRpgQuest={}",
+        player->GetName(),
+        player->GetGUID().GetCounter(),
+        sMyBotsConfig.SelfbotDisableRpgQuest() ? 1 : 0);
     return Ok("enabled", "Selfbot enabled");
 }
 

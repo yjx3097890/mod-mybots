@@ -27,6 +27,8 @@ MyBots.Selfbot.SelfOnlyInGame = 1
 # module can direct the character later.
 # 开启 Selfbot 后去掉 Playerbots 自带的任务/旅行/RPG 自主策略，
 # 方便本模块后续接管导演，避免双方抢控制。
+# Set to 0 to enable official autonomous play: +new rpg,+grind,-follow
+# 设为 0 时主动挂上官方自主游玩策略（Selfbot 默认不会像随机机器人那样自己玩）。
 # Default / 默认: 1
 MyBots.Selfbot.DisableRpgQuest = 1
 
