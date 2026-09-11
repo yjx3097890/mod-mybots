@@ -12,6 +12,8 @@
 #include "Player.h"
 
 #ifdef MYBOTS_HAVE_TRAVELMGR
+// Playerbots.h first: TravelMgr.h relies on its AiObject/config headers.
+#include "Playerbots.h"
 #include "TravelMgr.h"
 #endif
 

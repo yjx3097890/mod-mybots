@@ -8,6 +8,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectGuid.h"
 #include "Player.h"
+#include "QueryResult.h"
 
 #include <sstream>
 
