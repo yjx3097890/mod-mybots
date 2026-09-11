@@ -418,7 +418,7 @@ azerothcore-wotlk/          分支 Playerbot
 
 ### P2  任务 Job
 
-- [x] `complete_quest`：无脚本时用任务关系生成默认 HTN
+- [x] `complete_quest`：无手写脚本时从任务模板 + queststarter/ender + 目标生物/掉落表自动展开完整 HTN；`until` 会主动靠近并进攻
 - [x] JSON 脚本加载与热加载（`mybots_quest_script` + payload steps）
 - [x] 先打通 2～3 条新手区任务作为黄金用例（seed SQL）
 - [x] 失败原因写入 `mybots_event`，Web 可展示
