@@ -13,6 +13,7 @@
 #include "QueryResult.h"
 #include "QuestDef.h"
 
+#include <cmath>
 #include <sstream>
 
 namespace
@@ -417,7 +418,15 @@ void MyBotsDirector::TickJob(MyBotsJob& job)
     }
 
     // Recover from a bad first MovePoint before the next step runs.
-    MyBotsNav::CorrectIfUnderground(player);
+    // Rate-limit: teleport every tick looks exactly like rubber-banding.
+    uint32 const nowLift = MyBotsNow();
+    if (!job.lastLiftAt || nowLift - job.lastLiftAt >= 5)
+    {
+        float const zBefore = player->GetPositionZ();
+        MyBotsNav::CorrectIfUnderground(player);
+        if (std::fabs(player->GetPositionZ() - zBefore) > 0.5f)
+            job.lastLiftAt = nowLift;
+    }
 
     if (job.stepIndex < 0 || job.stepIndex >= static_cast<int>(job.steps.size()))
     {

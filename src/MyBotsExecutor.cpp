@@ -119,8 +119,29 @@ bool IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool f
     if (player->IsInFlight() || player->HasUnitFlag(UNIT_FLAG_TAXI_FLIGHT))
         return true;
 
-    // Pull the character out of the mesh if a previous bad destination sank them.
-    MyBotsNav::CorrectIfUnderground(player);
+    // If we are already walking toward the same logical destination, do not
+    // re-run PathGenerator / Clear+MovePoint. That restart is what looks like
+    // a sudden speed boost then a rubber-band.
+    bool const sameRequest = std::fabs(job.moveReqX - x) < 2.f
+        && std::fabs(job.moveReqY - y) < 2.f
+        && std::fabs(job.moveReqZ - z) < 3.f;
+    bool const driving = player->GetMotionMaster()->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE;
+    if (!force && sameRequest && driving && job.moveIssuedAt
+        && now - job.moveIssuedAt < sMyBotsConfig.NavRepathSec())
+        return true;
+
+    // Rate-limit underground lifts — every-tick teleport=true is pure rubber-band.
+    if (!job.lastLiftAt || now - job.lastLiftAt >= 5)
+    {
+        float const zBefore = player->GetPositionZ();
+        MyBotsNav::CorrectIfUnderground(player);
+        if (std::fabs(player->GetPositionZ() - zBefore) > 0.5f)
+            job.lastLiftAt = now;
+    }
+
+    job.moveReqX = x;
+    job.moveReqY = y;
+    job.moveReqZ = z;
 
     // Resolve walkable XYZ via mmap (Playerbots-style). Do NOT use Map::GetHeight
     // from the sky — that is what snapped us onto cave floors.
@@ -131,11 +152,9 @@ bool IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool f
         return false;
     }
 
-    bool const sameTarget = std::fabs(job.moveTargetX - x) < 1.f
-        && std::fabs(job.moveTargetY - y) < 1.f
-        && std::fabs(job.moveTargetZ - z) < 1.f;
-    bool const driving = player->GetMotionMaster()->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE;
-
+    bool const sameTarget = std::fabs(job.moveTargetX - x) < 1.5f
+        && std::fabs(job.moveTargetY - y) < 1.5f
+        && std::fabs(job.moveTargetZ - z) < 2.f;
     if (!force && sameTarget && driving && job.moveIssuedAt
         && now - job.moveIssuedAt < sMyBotsConfig.NavRepathSec())
         return true;
@@ -145,9 +164,12 @@ bool IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool f
     job.moveTargetZ = z;
     job.moveIssuedAt = now;
 
-    // Same flags Playerbots DoMovePoint uses: generatePath, never forceDestination.
-    player->GetMotionMaster()->Clear();
-    player->GetMotionMaster()->MovePoint(1, x, y, z, FORCED_MOVEMENT_NONE, 0.f, 0.f, true, false);
+    // Avoid Clear() when already on a point move — Mutate via MovePoint is enough
+    // and prevents the client from restarting the run animation at full speed.
+    MotionMaster* mm = player->GetMotionMaster();
+    if (!driving)
+        mm->Clear(false);
+    mm->MovePoint(1, x, y, z, FORCED_MOVEMENT_NONE, 0.f, 0.f, true, false);
     return true;
 }
 } // namespace
@@ -610,6 +632,9 @@ void MyBotsExecutor::HaltControl(Player* player, MyBotsJob* job)
         job->navAttempts = 0;
         job->detourUntil = 0;
         job->moveIssuedAt = 0;
+        job->moveReqX = job->moveReqY = job->moveReqZ = 0.f;
+        job->moveTargetX = job->moveTargetY = job->moveTargetZ = 0.f;
+        job->lastLiftAt = 0;
         job->taxiRetryAt = 0;
         job->taxiInProgress = false;
         job->taxiSawFlight = false;

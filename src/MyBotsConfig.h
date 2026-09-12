@@ -62,7 +62,7 @@ private:
     float _navTaxiMinDistance = 600.f;
     float _navTaxiBoardDistance = 12.f;
     uint32 _navTaxiRetrySec = 120;
-    uint32 _navRepathSec = 5;
+    uint32 _navRepathSec = 10;
     uint32 _navMaxStuckRetries = 4;
     float _navDetourRadius = 10.f;
     uint32 _navDetourSec = 12;

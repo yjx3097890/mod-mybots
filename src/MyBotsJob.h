@@ -97,6 +97,11 @@ struct MyBotsJob
     float navSpawnX = 0.f;
     float navSpawnY = 0.f;
     float navSpawnZ = 0.f;
+    // Logical move request (before PrepareWalkTarget) — used to avoid repath churn.
+    float moveReqX = 0.f;
+    float moveReqY = 0.f;
+    float moveReqZ = 0.f;
+    uint32 lastLiftAt = 0;
     // until step temporarily enables grind; cleared when the step finishes.
     bool questGrindEnabled = false;
     uint32 questHuntEntry = 0;

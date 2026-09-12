@@ -33,8 +33,10 @@ MyBots.Selfbot.SelfOnlyInGame = 1
 # Default / 默认: 1
 MyBots.Selfbot.DisableRpgQuest = 1
 
-# Drop client movement packets while Selfbot AI is attached (reduces rubber-banding).
-# Selfbot 挂载期间丢弃客户端移动包，减轻闪现/橡皮筋。旁观更稳。
+# Drop client-*driven* movement packets while Selfbot AI is attached (reduces
+# rubber-banding). Teleport / force-speed ACKs are still accepted so the client
+# does not desync into "sprint then snap back".
+# Selfbot 挂载期间只丢弃客户端主动移动包；传送/强制速度 ACK 仍放行，避免加速后回弹。
 # Default / 默认: 1
 MyBots.Selfbot.IgnoreClientMovement = 1
 
@@ -120,10 +122,10 @@ MyBots.Nav.TaxiBoardDistance = 12
 MyBots.Nav.TaxiRetrySec = 120
 
 # Minimum seconds between re-issuing the same destination to the movement
-# generator. Re-pathing every tick causes stutter.
-# 同一目的地重新下发移动指令的最小间隔（秒）。每 tick 重算会导致抽搐。
-# Default / 默认: 5
-MyBots.Nav.RepathSec = 5
+# generator. Re-pathing every tick causes stutter / speed hitch.
+# 同一目的地重新下发移动指令的最小间隔（秒）。过频重算会加速抽一下再回弹。
+# Default / 默认: 10
+MyBots.Nav.RepathSec = 10
 
 # How many detour attempts before move_to gives up
 # 绕行重试次数，用尽后 move_to 判失败

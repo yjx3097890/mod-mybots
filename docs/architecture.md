@@ -105,7 +105,7 @@ nc -rpg quest,-travel
 
 可选的最小核心补丁（尽量上游化，不放业务）：
 
-- Selfbot 期间忽略除心跳外的客户端移动包，减轻橡皮筋。
+- Selfbot 期间只丢弃客户端主动移动包（WASD/心跳等），**放行**传送 ACK / 强制速度 ACK，避免加速后回弹。
 - 若缺少「把意图投到指定地图线程」的公开入口，再对 `PlayerbotWorldThreadProcessor` 做薄封装。
 
 ---
@@ -386,7 +386,7 @@ azerothcore-wotlk/          分支 Playerbot
 
 优先级：P0 必须可演示 → P1 Web 能指挥 → P2 任务/巡逻能用 → P3 体验与 LLM。
 
-当前进度：**P0 已实机验证**；**P1～P2.5 Job/执行器/巡逻已实现于模块**；管理端由外部系统对接（接口见 [docs/api.md](api.md)）；橡皮筋用 `IgnoreClientMovement` 丢弃客户端移动包。
+当前进度：**P0 已实机验证**；**P1～P2.5 Job/执行器/巡逻已实现于模块**；管理端由外部系统对接（接口见 [docs/api.md](api.md)）；橡皮筋用 `IgnoreClientMovement` 丢弃客户端主动移动包（保留 ACK）。
 
 ### P0  地基（约 1～2 周）
 

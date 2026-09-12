@@ -28,7 +28,7 @@ void MyBotsConfig::Load(bool reload)
     _navTaxiMinDistance = sConfigMgr->GetOption<float>("MyBots.Nav.TaxiMinDistance", 600.f);
     _navTaxiBoardDistance = sConfigMgr->GetOption<float>("MyBots.Nav.TaxiBoardDistance", 12.f);
     _navTaxiRetrySec = sConfigMgr->GetOption<uint32>("MyBots.Nav.TaxiRetrySec", 120);
-    _navRepathSec = sConfigMgr->GetOption<uint32>("MyBots.Nav.RepathSec", 5);
+    _navRepathSec = sConfigMgr->GetOption<uint32>("MyBots.Nav.RepathSec", 10);
     _navMaxStuckRetries = sConfigMgr->GetOption<uint32>("MyBots.Nav.MaxStuckRetries", 4);
     _navDetourRadius = sConfigMgr->GetOption<float>("MyBots.Nav.DetourRadius", 10.f);
     _navDetourSec = sConfigMgr->GetOption<uint32>("MyBots.Nav.DetourSec", 12);
