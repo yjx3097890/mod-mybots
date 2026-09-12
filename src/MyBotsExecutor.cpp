@@ -678,22 +678,6 @@ MyBotsStepOutcome MyBotsExecutor::UntilQuestComplete(Player* player, MyBotsJob& 
         return o;
     }
 
-    // Temporarily let Playerbots fight / open quest containers while we shepherd
-    // movement onto objectives (e.g. Dead-tooth's Key → strongbox).
-    if (!job.questGrindEnabled)
-    {
-        if (PlayerbotAI* ai = GET_PLAYERBOT_AI(player))
-            ai->ChangeStrategy("+grind,+rpg quest,-follow", BOT_STATE_NON_COMBAT);
-        job.questGrindEnabled = true;
-    }
-
-    if (player->IsInCombat())
-    {
-        o.result = MyBotsStepResult::Running;
-        o.detail = "fighting";
-        return o;
-    }
-
     // Prefer entries baked into the step; fall back to live plan from the template.
     std::vector<uint32> entries = ParseUIntArray(detail, "entries");
     if (entries.empty())
@@ -702,10 +686,38 @@ MyBotsStepOutcome MyBotsExecutor::UntilQuestComplete(Player* player, MyBotsJob& 
         if (ParseUInt(detail, "entry", single) && single)
             entries.push_back(single);
     }
-    if (entries.empty())
+
+    uint32 speakFlag = 0;
+    ParseUInt(detail, "speak", speakFlag);
+    bool speakObjective = speakFlag != 0;
+    if (entries.empty() || !speakObjective)
     {
         MyBotsQuestPlan const plan = MyBotsQuestPlanner::Resolve(questId, detail);
-        entries = plan.objectiveEntries;
+        if (entries.empty())
+            entries = plan.objectiveEntries;
+        if (!speakObjective)
+            speakObjective = plan.speakObjective;
+    }
+
+    // Temporarily let Playerbots fight / open quest containers, or only talk for
+    // gossip/event objectives (Great Bear Spirit must not be grind-attacked).
+    if (!job.questGrindEnabled)
+    {
+        if (PlayerbotAI* ai = GET_PLAYERBOT_AI(player))
+        {
+            if (speakObjective)
+                ai->ChangeStrategy("+rpg quest,-grind,-follow", BOT_STATE_NON_COMBAT);
+            else
+                ai->ChangeStrategy("+grind,+rpg quest,-follow", BOT_STATE_NON_COMBAT);
+        }
+        job.questGrindEnabled = true;
+    }
+
+    if (player->IsInCombat() && !speakObjective)
+    {
+        o.result = MyBotsStepResult::Running;
+        o.detail = "fighting";
+        return o;
     }
 
     auto stillNeedsCreature = [&](uint32 entry) -> bool
@@ -799,9 +811,24 @@ MyBotsStepOutcome MyBotsExecutor::UntilQuestComplete(Player* player, MyBotsJob& 
 
     if (Creature* target = FindNearestCreature(player, hunt, 40.f))
     {
-        if (player->IsWithinDistInMap(target, 5.f))
+        if (player->IsWithinDistInMap(target, speakObjective ? 8.f : 5.f))
         {
             player->SetFacingToObject(target);
+            if (speakObjective)
+            {
+                // Gossip / event credit — open menu and poke options (e.g. 5929).
+                Interact(player, hunt);
+                for (uint32 opt = 0; opt < 6; ++opt)
+                    GossipSelect(player, hunt, 0, opt);
+                if (PlayerbotAI* ai = GET_PLAYERBOT_AI(player))
+                {
+                    TryDoAction(ai, "talk to quest giver");
+                    TryDoAction(ai, "rpg");
+                }
+                o.result = MyBotsStepResult::Running;
+                o.detail = "speaking";
+                return o;
+            }
             if (!player->GetVictim())
                 player->Attack(target, true);
             if (PlayerbotAI* ai = GET_PLAYERBOT_AI(player))
@@ -811,16 +838,16 @@ MyBotsStepOutcome MyBotsExecutor::UntilQuestComplete(Player* player, MyBotsJob& 
             return o;
         }
         MyBotsStepOutcome move = MoveTo(player, job, target->GetPositionX(), target->GetPositionY(),
-            target->GetPositionZ(), 4.f);
+            target->GetPositionZ(), speakObjective ? 6.f : 4.f);
         if (move.result == MyBotsStepResult::Failed)
             return move;
         o.result = MyBotsStepResult::Running;
-        o.detail = "hunting";
+        o.detail = speakObjective ? "approaching_speak" : "hunting";
         return o;
     }
 
     // Out of grid range: walk/fly toward the nearest spawn of this entry.
-    MyBotsStepOutcome move = MoveToCreature(player, job, hunt, 20.f);
+    MyBotsStepOutcome move = MoveToCreature(player, job, hunt, speakObjective ? 8.f : 20.f);
     if (move.result == MyBotsStepResult::Failed)
     {
         o.result = MyBotsStepResult::Running;

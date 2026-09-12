@@ -11,10 +11,12 @@ struct MyBotsQuestPlan
     uint32 questId = 0;
     uint32 giverEntry = 0;
     uint32 turninEntry = 0;
-    // Creature entries the character should hunt while the quest is incomplete.
+    // Creature entries the character should hunt / speak with while incomplete.
     std::vector<uint32> objectiveEntries;
     // False for speak/deliver quests that only need accept → turn-in.
     bool hasObjectives = false;
+    // True when the objective is gossip/event credit (do not grind-attack NPCs).
+    bool speakObjective = false;
     std::string error;
 };
 

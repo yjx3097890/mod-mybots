@@ -2,8 +2,10 @@
 #include "MyBotsConfig.h"
 #include "MyBotsExecutor.h"
 
+#include "DatabaseEnv.h"
 #include "Log.h"
 #include "ObjectMgr.h"
+#include "QueryResult.h"
 #include "QuestDef.h"
 
 #ifdef MYBOTS_HAVE_TRAVELMGR
@@ -47,6 +49,40 @@ void CollectCreaturesDroppingItem(uint32 itemId, std::vector<uint32>& out)
                 AddUnique(out, creatureEntry);
                 break;
             }
+}
+
+// Gossip / script NPCs that fire AreaExploredOrEventHappens(questId), e.g.
+// Great Bear Spirit (11956) for quest 5929.
+void CollectEventCreditCreatures(uint32 questId, std::vector<uint32>& out)
+{
+    if (!questId)
+        return;
+    if (QueryResult result = WorldDatabase.Query(
+            "SELECT DISTINCT entry FROM smart_scripts WHERE source_type = 0 AND "
+            "action_type = 15 AND action_param1 = {}",
+            questId))
+    {
+        do
+        {
+            AddUnique(out, result->Fetch()[0].Get<uint32>());
+        } while (result->NextRow());
+    }
+}
+
+bool QuestHasKillOrItemObjectives(Quest const* quest)
+{
+    if (!quest)
+        return false;
+    for (uint8 i = 0; i < QUEST_OBJECTIVES_COUNT; ++i)
+        if (quest->RequiredNpcOrGo[i] > 0 && quest->RequiredNpcOrGoCount[i] > 0)
+            return true;
+    for (uint8 i = 0; i < QUEST_ITEM_OBJECTIVES_COUNT; ++i)
+        if (quest->RequiredItemId[i] && quest->RequiredItemCount[i])
+            return true;
+    for (uint8 i = 0; i < QUEST_SOURCE_ITEM_IDS_COUNT; ++i)
+        if (quest->ItemDrop[i] && quest->ItemDropQuantity[i])
+            return true;
+    return false;
 }
 } // namespace
 
@@ -110,6 +146,16 @@ MyBotsQuestPlan MyBotsQuestPlanner::Resolve(uint32 questId, std::string const& p
         CollectCreaturesDroppingItem(itemId, plan.objectiveEntries);
     }
 
+    // Speak / explore / gossip-credit quests (Great Bear Spirit 5929, etc.): no
+    // RequiredNpcOrGo/Item rows, but SpecialFlags mark an event objective.
+    if (quest->HasSpecialFlag(QUEST_SPECIAL_FLAGS_EXPLORATION_OR_EVENT)
+        || quest->HasSpecialFlag(QUEST_SPECIAL_FLAGS_SPEAKTO))
+    {
+        plan.hasObjectives = true;
+        plan.speakObjective = !QuestHasKillOrItemObjectives(quest);
+        CollectEventCreditCreatures(questId, plan.objectiveEntries);
+    }
+
 #ifdef MYBOTS_HAVE_TRAVELMGR
     // Playerbots already resolved loot → creature for quest items; reuse that.
     if (sMyBotsConfig.NavUseTravelMgr())
@@ -144,9 +190,9 @@ MyBotsQuestPlan MyBotsQuestPlanner::Resolve(uint32 questId, std::string const& p
         plan.hasObjectives = true;
 
     LOG_INFO("module.mybots",
-        "MyBots quest plan {}: giver={} turnin={} objectives={} hasObj={}",
+        "MyBots quest plan {}: giver={} turnin={} objectives={} hasObj={} speak={}",
         questId, plan.giverEntry, plan.turninEntry, plan.objectiveEntries.size(),
-        plan.hasObjectives ? 1 : 0);
+        plan.hasObjectives ? 1 : 0, plan.speakObjective ? 1 : 0);
 
     return plan;
 }

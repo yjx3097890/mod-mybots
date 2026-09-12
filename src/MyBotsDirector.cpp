@@ -194,8 +194,8 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
         }
     }
 
-    // Kill/collect objectives. Speak/deliver quests have none — skip until and
-    // go straight to the turn-in NPC (until would wait forever for COMPLETE).
+    // Kill/collect/speak objectives. Pure deliver-after-accept quests have none —
+    // skip until and go straight to the turn-in NPC.
     if (plan.hasObjectives && !readyToTurnIn && !alreadyRewarded)
     {
         for (uint32 entry : plan.objectiveEntries)
@@ -210,6 +210,8 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
         until.op = "until";
         std::ostringstream detail;
         detail << "{\"questId\":" << questId;
+        if (plan.speakObjective)
+            detail << ",\"speak\":1";
         if (!plan.objectiveEntries.empty())
         {
             detail << ",\"entries\":[";
