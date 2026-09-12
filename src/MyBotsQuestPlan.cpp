@@ -91,6 +91,22 @@ MyBotsQuestPlan MyBotsQuestPlanner::Resolve(uint32 questId, std::string const& p
         uint32 const itemId = quest->RequiredItemId[i];
         if (!itemId || !quest->RequiredItemCount[i])
             continue;
+        // Item objectives always need an until step — even when the item comes
+        // from a chest GO and creature_questitem has no row for it. Skipping
+        // until here is what made quests like 1667 walk straight to turn-in
+        // and fail with objectives_incomplete.
+        plan.hasObjectives = true;
+        CollectCreaturesDroppingItem(itemId, plan.objectiveEntries);
+    }
+
+    // Source / intermediate items (keys, etc.). Quest 1667 stores Dead-Tooth's
+    // Key here while the badge objective is on a strongbox.
+    for (uint8 i = 0; i < QUEST_SOURCE_ITEM_IDS_COUNT; ++i)
+    {
+        uint32 const itemId = quest->ItemDrop[i];
+        if (!itemId || !quest->ItemDropQuantity[i])
+            continue;
+        plan.hasObjectives = true;
         CollectCreaturesDroppingItem(itemId, plan.objectiveEntries);
     }
 

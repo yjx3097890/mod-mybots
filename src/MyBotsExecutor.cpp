@@ -678,11 +678,12 @@ MyBotsStepOutcome MyBotsExecutor::UntilQuestComplete(Player* player, MyBotsJob& 
         return o;
     }
 
-    // Temporarily let Playerbots fight while we shepherd movement onto objectives.
+    // Temporarily let Playerbots fight / open quest containers while we shepherd
+    // movement onto objectives (e.g. Dead-tooth's Key → strongbox).
     if (!job.questGrindEnabled)
     {
         if (PlayerbotAI* ai = GET_PLAYERBOT_AI(player))
-            ai->ChangeStrategy("+grind,-follow,-rpg quest", BOT_STATE_NON_COMBAT);
+            ai->ChangeStrategy("+grind,+rpg quest,-follow", BOT_STATE_NON_COMBAT);
         job.questGrindEnabled = true;
     }
 
@@ -721,7 +722,35 @@ MyBotsStepOutcome MyBotsExecutor::UntilQuestComplete(Player* player, MyBotsJob& 
         if (listedAsKill)
             return false; // kill objective finished for this entry
 
-        // Not a kill objective → treat as item-dropper; keep hunting until quest done.
+        // Item / source-item dropper: keep hunting only while the character still
+        // needs an item this creature is known to provide (questitem map).
+        if (CreatureQuestItemList const* items = sObjectMgr->GetCreatureQuestItemList(entry))
+        {
+            bool needsAny = false;
+            for (uint32 itemId : *items)
+            {
+                if (!itemId)
+                    continue;
+                for (uint8 i = 0; i < QUEST_ITEM_OBJECTIVES_COUNT; ++i)
+                {
+                    if (quest->RequiredItemId[i] == itemId
+                        && player->GetItemCount(itemId) < quest->RequiredItemCount[i])
+                        return true;
+                }
+                for (uint8 i = 0; i < QUEST_SOURCE_ITEM_IDS_COUNT; ++i)
+                {
+                    if (quest->ItemDrop[i] == itemId
+                        && player->GetItemCount(itemId) < quest->ItemDropQuantity[i])
+                        return true;
+                }
+                needsAny = true;
+            }
+            // Mapped items are already satisfied (e.g. key looted) — stop chasing.
+            if (needsAny)
+                return false;
+        }
+
+        // Unknown drop mapping: keep hunting until the quest completes.
         return true;
     };
 
@@ -757,8 +786,10 @@ MyBotsStepOutcome MyBotsExecutor::UntilQuestComplete(Player* player, MyBotsJob& 
 
     if (!hunt)
     {
-        // No known creature to chase (GO / talk / explore quests). Keep grind on
-        // and wait — operator can cancel, or a script override should be used.
+        // No creature left to chase (key looted, badge in a chest, speak/GO). Keep
+        // grind/rpg quest on so Playerbots can use the key / loot the object.
+        if (PlayerbotAI* ai = GET_PLAYERBOT_AI(player))
+            TryDoAction(ai, "rpg");
         o.result = MyBotsStepResult::Running;
         o.detail = "waiting_objectives";
         return o;
