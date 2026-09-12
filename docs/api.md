@@ -217,8 +217,6 @@ Body 必含 `type`。可选 `replace`（默认跟 `MyBots.Job.Replace`）。
 
 每个 step 有两个字符串字段：`detail` 是创建作业时的参数，不会变；`result` 是执行器上一次的返回，用来看进度，取值如 `moving`、`in_combat`、`detour`、`taxi_approach`、`in_flight`、`arrived`。
 
-`result` 为 `unreachable` 表示目标点当前算不出真实导航网格路径（常见于目标格子还没加载、或目标在无法抵达的室内层），此时角色**故意原地不动**而不是发一条穿墙直线；接着卡住计时会触发绕行，重试用尽才失败为 `stuck`。
-
 ### `POST /v1/characters/{id}/jobs/{jobId}/pause`
 
 暂停。
