@@ -3,6 +3,9 @@
 #include "MyBotsExecutor.h"
 
 #include "DatabaseEnv.h"
+// GameObjectData uses G3D::Quat; include Quat before that header when pulling it
+// in isolation (ObjectMgr alone is not always enough for module TUs).
+#include "G3D/Quat.h"
 #include "GameObjectData.h"
 #include "ItemTemplate.h"
 #include "Log.h"
