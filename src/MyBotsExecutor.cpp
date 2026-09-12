@@ -108,14 +108,16 @@ void ResetNavState(MyBotsJob& job)
 // Clearing the motion master every tick restarts pathfinding and makes the
 // character stutter, so only re-issue when the target moved, the generator
 // dropped out, or the re-path interval elapsed.
-void IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool force)
+// Returns false when no navmesh route exists, so callers can escalate instead of
+// letting the character walk a straight line through walls.
+bool IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool force)
 {
     uint32 const now = MyBotsNow();
 
     // Never interrupt an active taxi spline — Clear() here is what caused the
     // Goldshire board→drop→board loop.
     if (player->IsInFlight() || player->HasUnitFlag(UNIT_FLAG_TAXI_FLIGHT))
-        return;
+        return true;
 
     // Pull the character out of the mesh if a previous bad destination sank them.
     MyBotsNav::CorrectIfUnderground(player);
@@ -126,7 +128,7 @@ void IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool f
     {
         LOG_DEBUG("module.mybots", "MyBots: no walkable path for {} toward ({:.1f},{:.1f},{:.1f})",
             player->GetName(), x, y, z);
-        return;
+        return false;
     }
 
     bool const sameTarget = std::fabs(job.moveTargetX - x) < 1.f
@@ -136,7 +138,7 @@ void IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool f
 
     if (!force && sameTarget && driving && job.moveIssuedAt
         && now - job.moveIssuedAt < sMyBotsConfig.NavRepathSec())
-        return;
+        return true;
 
     job.moveTargetX = x;
     job.moveTargetY = y;
@@ -146,6 +148,7 @@ void IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool f
     // Same flags Playerbots DoMovePoint uses: generatePath, never forceDestination.
     player->GetMotionMaster()->Clear();
     player->GetMotionMaster()->MovePoint(1, x, y, z, FORCED_MOVEMENT_NONE, 0.f, 0.f, true, false);
+    return true;
 }
 } // namespace
 
@@ -381,7 +384,16 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
         }
     }
 
-    IssueMove(player, job, x, y, z, false);
+    if (!IssueMove(player, job, x, y, z, false))
+    {
+        // No navmesh route: stay put and let the stuck timer escalate to a
+        // detour. Issuing a move anyway is what produced straight lines through
+        // walls and floors.
+        o.result = MyBotsStepResult::Running;
+        o.detail = "unreachable";
+        return o;
+    }
+
     o.result = MyBotsStepResult::Running;
     o.detail = "moving";
     return o;
@@ -410,13 +422,13 @@ MyBotsStepOutcome MyBotsExecutor::MoveToCreature(Player* player, MyBotsJob& job,
         job.navSpawnEntry = entry;
         job.navSpawnX = sx;
         job.navSpawnY = sy;
-        // Hint from the spawn's own Z first. Using the player's Z here used to
-        // pick a cave floor at the destination when the character was sunk or
-        // standing in another zone at a different elevation.
-        float surface = player->GetMapHeight(sx, sy, sz);
-        if (surface <= INVALID_HEIGHT)
-            surface = player->GetMapHeight(sx, sy, sz + 5.f);
-        if (surface > INVALID_HEIGHT)
+        // The spawn's own Z is authoritative — it is where the creature stands.
+        // Only nudge it onto the surface when the two nearly agree; a large
+        // disagreement means the height lookup found another storey (a tavern
+        // floor vs. the terrain under the city), and following it is how the
+        // character ended up below Stormwind.
+        float const surface = player->GetMapHeight(sx, sy, sz);
+        if (surface > INVALID_HEIGHT && std::fabs(surface - sz) <= 3.f)
             sz = surface;
         job.navSpawnZ = sz;
     }

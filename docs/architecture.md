@@ -223,7 +223,10 @@ HTN 原语（Executor 只认这些）：
 
 ### 6.1.1 当前落地（`MyBotsNav` + `MyBotsExecutor::MoveTo`）
 
-- 跟随交给 `MotionMaster::MovePoint`（内部走 MMAP），目标高度先经 `PathGenerator` + `GetMapHeight`（与 Playerbots `SearchForBestPath` 同思路）解析；**禁止**从高空 `GetHeight` 贴地（会贴到洞穴层导致钻地）。`forceDestination=false`，走不通不强冲。已钻地时 `CorrectIfUnderground` 拉回地面。
+- 跟随交给 `MotionMaster::MovePoint`（内部走 MMAP），目标高度先经 `PathGenerator` + `GetMapHeight`（与 Playerbots `SearchForBestPath` 同思路）解析；**禁止**从高空 `GetHeight` 贴地（会贴到洞穴层导致钻地）。`forceDestination=false`，走不通不强冲。
+- 候选高度按**离目标 Z 最近**取，不取路径最短：穿建筑落到楼下的那条路往往更短，按最短选会把角色送到目标脚下那一层（暴风城地底 / 猪与哨声旅店楼下）。严格 pass 拒绝比目标低 5 码以上的楼层，只有严格 pass 全空时才放宽（应对手写坐标 / 过期 spawn 数据）。
+- `PATHFIND_NOT_USING_PATH` 视为无效路径。目标格子的 mmap 瓦片未加载时 `CalculatePath` 会返回 `NORMAL | NOT_USING_PATH` 加一条穿越一切的直线——这是"走直线穿墙"的主因。此时改走 `ApproachWaypoint`：沿直线方向取 160/120/80/50/30 码处仍有真实网格路径的中间点，边走边加载瓦片，后续 tick 自然接上真目标。彻底找不到路时 `move_to` 返回 `unreachable` 原地不动，交给卡住逻辑绕行，绝不硬发直线。
+- `CorrectIfUnderground` 只在角色**确实掉出导航网格**（`IsOffMesh`：向前 6 码探路得到 `NOPATH`/`FARFROMPOLY_START`）时才纠正，避免把站在桥下的角色瞬移到桥上；探测高度从头顶 40 码往下找，否则在城市 WMO 下面只会找到更低的地形。
 - 远路只做了 Taxi 一层：直线距离超过 `MyBots.Nav.TaxiMinDistance` 时，找出发/落地两个 taxi 节点，先走到出发节点再 `ActivateTaxiPathTo`。落地节点必须比自己明显更接近目标（< 60%）才值得飞。传送门与船暂未做，跨地图请拆作业。
 - 卡住后依次：记坏点 → 侧面偏移点（左右扇形，每轮扩大半径，校验地面高度、坏点、LOS）→ 重试次数用尽才 `stuck` 失败。
 - 坏点是本模块自己的带 TTL 列表；同时**只读**查询 Playerbots `TravelMgr::isBadMmap`（导航网格加载失败的格子），不回写。
