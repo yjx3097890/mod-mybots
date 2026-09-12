@@ -147,7 +147,7 @@ bool FindSummonSiteNear(uint32 focusId, uint16 mapId, float refX, float refY, fl
     {
         for (auto const& [entry, go] : *all)
         {
-            if (go.type != GAMEOBJECT_TYPE_SPELLFOCUS)
+            if (go.type != GAMEOBJECT_TYPE_SPELL_FOCUS)
                 continue;
             if (focusId && go.spellFocus.focusId != focusId)
                 continue;
