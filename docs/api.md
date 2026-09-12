@@ -89,15 +89,16 @@ Job 运行时请保持 `MyBots.Selfbot.DisableRpgQuest = 1`，避免官方 RPG �
 
 ### `GET /v1/characters/{id}/quests/available`
 
-附近约 80 码内 NPC 任务菜单里，当前角色**真正能接**的任务（`PrepareQuestMenu` + `CanTakeQuest`）。不是按等级扫全库的启发式列表。
+当前地图上、角色**本阵营可接**的任务（该 map 有 `creature_queststarter` 刷新 + `CanTakeQuest` / 种族与敌对 NPC 过滤）。按与接任务 NPC 的距离排序。
 
 ```json
 {
   "ok": true,
   "online": true,
-  "source": "nearby",
-  "range": 80,
-  "note": "nearby_questgivers",
+  "source": "map",
+  "map": 0,
+  "zone": 12,
+  "note": "map_questgivers",
   "items": [
     {
       "questId": 33,
@@ -106,7 +107,7 @@ Job 运行时请保持 `MyBots.Selfbot.DisableRpgQuest = 1`，避免官方 RPG �
       "status_label": "none",
       "giverEntry": 197,
       "heuristic": false,
-      "source": "nearby"
+      "source": "map"
     }
   ]
 }
