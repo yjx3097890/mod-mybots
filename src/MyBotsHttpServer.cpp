@@ -1,10 +1,14 @@
 #include "MyBotsHttpServer.h"
 #include "MyBotsConfig.h"
+#include "MyBotsExecutor.h"
 #include "MyBotsIntentQueue.h"
+#include "MyBotsLlm.h"
+#include "MyBotsUtil.h"
 
 #include "Log.h"
 #include "Define.h"
 
+#include <algorithm>
 #include <atomic>
 #include <boost/asio.hpp>
 #include <cctype>
@@ -338,6 +342,90 @@ void HandleRequest(boost::asio::ip::tcp::socket sock)
             intent.op = MyBotsIntentOp::QuestLog;
         else if (method == "GET" && restAfterChar == "quests/available")
             intent.op = MyBotsIntentOp::QuestsAvailable;
+        else if (method == "POST" && restAfterChar == "plan")
+        {
+            // Dry-run: world builds context, then this thread calls DeepSeek (long timeout).
+            intent.op = MyBotsIntentOp::PlanDryRun;
+            auto queued = sMyBotsIntentQueue.Submit(std::move(intent));
+            if (!queued)
+            {
+                Send(sock, 429, "{\"ok\":false,\"code\":\"queue_full\",\"message\":\"Intent queue is full\"}");
+                return;
+            }
+            uint32 const waitMs = std::max(sMyBotsConfig.ApiTimeoutMs(), 5000u);
+            if (!sMyBotsIntentQueue.Wait(queued, waitMs))
+            {
+                Send(sock, 503, "{\"ok\":false,\"code\":\"timeout\",\"message\":\"World thread did not build plan context in time\"}");
+                return;
+            }
+            if (queued->httpStatus != 200)
+            {
+                Send(sock, queued->httpStatus, queued->response);
+                return;
+            }
+            if (!MyBotsLlm::IsReady())
+            {
+                // Context-only when LLM is disabled.
+                Send(sock, queued->httpStatus, queued->response);
+                return;
+            }
+            // Extract context JSON object from {"ok":true,...,"context":{...}}
+            std::string const& resp = queued->response;
+            auto ctxKey = resp.find("\"context\"");
+            if (ctxKey == std::string::npos)
+            {
+                Send(sock, queued->httpStatus, queued->response);
+                return;
+            }
+            auto brace = resp.find('{', ctxKey);
+            if (brace == std::string::npos)
+            {
+                Send(sock, 500, "{\"ok\":false,\"code\":\"bad_context\"}");
+                return;
+            }
+            int depth = 0;
+            size_t end = brace;
+            for (; end < resp.size(); ++end)
+            {
+                if (resp[end] == '{')
+                    ++depth;
+                else if (resp[end] == '}')
+                {
+                    --depth;
+                    if (depth == 0)
+                        break;
+                }
+            }
+            if (depth != 0)
+            {
+                Send(sock, 500, "{\"ok\":false,\"code\":\"bad_context\"}");
+                return;
+            }
+            std::string context = resp.substr(brace, end - brace + 1);
+            uint32 questId = 0;
+            MyBotsExecutor::ParseUInt(body.empty() ? "{}" : body, "questId", questId);
+            if (!questId)
+                MyBotsExecutor::ParseUInt(body.empty() ? "{}" : body, "quest_id", questId);
+            auto plan = MyBotsLlm::PlanSync(questId, context);
+            std::ostringstream out;
+            out << "{\"ok\":" << (plan.ok ? "true" : "false")
+                << ",\"code\":\"" << (plan.ok ? "planned" : "plan_failed") << "\""
+                << ",\"questId\":" << questId
+                << ",\"context\":" << context;
+            if (!plan.error.empty())
+                out << ",\"error\":\"" << MyBotsJsonEscapeCopy(plan.error) << "\"";
+            out << ",\"steps\":[";
+            for (size_t i = 0; i < plan.steps.size(); ++i)
+            {
+                if (i)
+                    out << ",";
+                out << "{\"op\":\"" << MyBotsJsonEscapeCopy(plan.steps[i].op)
+                    << "\",\"detail\":\"" << MyBotsJsonEscapeCopy(plan.steps[i].detail) << "\"}";
+            }
+            out << "]}";
+            Send(sock, plan.ok ? 200 : 502, out.str());
+            return;
+        }
         else
         {
             Send(sock, 404, "{\"ok\":false,\"code\":\"not_found\",\"message\":\"Unknown route\"}");

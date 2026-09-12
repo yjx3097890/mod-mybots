@@ -13,11 +13,22 @@ struct MyBotsQuestPlan
     uint32 turninEntry = 0;
     // Creature entries the character should hunt / speak with while incomplete.
     std::vector<uint32> objectiveEntries;
+    // Kill targets with no creature table spawn (must be summoned, e.g. 5676).
+    std::vector<uint32> summonedEntries;
+    // Quest StartItem used at a spell-focus / summoning circle (Bloodstone Choker).
+    uint32 useItemId = 0;
+    // Nearest summoning-circle GO near the turn-in / giver.
+    bool hasSummonSite = false;
+    float summonX = 0.f;
+    float summonY = 0.f;
+    float summonZ = 0.f;
     // False for speak/deliver quests that only need accept → turn-in.
     bool hasObjectives = false;
     // True when the objective is gossip/event credit (do not grind-attack NPCs).
     bool speakObjective = false;
     std::string error;
+
+    bool HasSummonedObjective() const { return !summonedEntries.empty(); }
 };
 
 class MyBotsQuestPlanner

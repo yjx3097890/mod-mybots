@@ -30,6 +30,7 @@ public:
     static MyBotsStepOutcome MoveTo(Player* player, MyBotsJob& job, float x, float y, float z, float dist = 2.5f);
     static MyBotsStepOutcome MoveToCreature(Player* player, MyBotsJob& job, uint32 entry, float dist = 3.f);
     static MyBotsStepOutcome Interact(Player* player, uint32 entry);
+    static MyBotsStepOutcome UseItem(Player* player, MyBotsJob& job, uint32 itemId);
     static MyBotsStepOutcome GossipSelect(Player* player, uint32 entry, uint32 menu, uint32 option);
     static MyBotsStepOutcome AcceptQuest(Player* player, uint32 questId, uint32 giverEntry = 0);
     static MyBotsStepOutcome TurnInQuest(Player* player, uint32 questId, uint32 giverEntry = 0);

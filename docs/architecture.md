@@ -332,14 +332,13 @@ Gateway → `mod-mybots`（JSON 一行或 HTTP localhost）：
 
 ---
 
-## 9. LLM（V2，不进第一期热路径）
+## 9. LLM（P4，模块内 DeepSeek）
 
-输入：角色快照（位置、日志、背包摘要、附近单位 GUID 列表）+ 允许的 tool schema。  
-输出：`AssignJob` 或改 HTN 目标，禁止裸坐标/发明 GUID。  
-执行：与 Web 共用同一 Intent 管道。  
-失败：回退 `grind` 或 `idle`，并把原因推到 Web。
-
-参考：[felworld/mod-llm](https://github.com/felworld/mod-llm) 的「快照离线、工具表、世界线程回投」；不要学把 LLM 同步塞进 `UpdateAI` 的做法。
+输入：角色快照（位置、任务状态）+ 规则 hints（giver/turnin/objectiveEntries）+ 允许的 op/entry 白名单。  
+输出：校验后的 Job `steps`（HTN），禁止裸坐标与发明 entry。  
+执行：与 Web 共用同一 Intent 管道；HTTPS 调用在 `MyBotsLlm` 工作线程。  
+失败：`FallbackRules=1` 时回退 `BuildCompleteQuest`；否则 Job `plan_failed`。  
+卡住重规划：`ReplanOnStuck=1` 时，`move_to` 因 `stuck`/`unreachable` 失败会异步请 LLM 改后续 steps（换 NPC/等待/对话），事件 `llm_replan_*`。
 
 ---
 
@@ -386,7 +385,7 @@ azerothcore-wotlk/          分支 Playerbot
 
 优先级：P0 必须可演示 → P1 Web 能指挥 → P2 任务/巡逻能用 → P3 体验与 LLM。
 
-当前进度：**P0 已实机验证**；**P1～P2.5 Job/执行器/巡逻已实现于模块**；管理端由外部系统对接（接口见 [docs/api.md](api.md)）；橡皮筋用 `IgnoreClientMovement` 丢弃客户端主动移动包（保留 ACK）。
+当前进度：**P0 已实机验证**；**P1～P2.5 Job/执行器/巡逻已实现于模块**；**P3.5 寻路增强已落地**；**P4 模块内 DeepSeek 规划已实现（默认关闭）**；管理端由外部系统对接（接口见 [docs/api.md](api.md)）。
 
 ### P0  地基（约 1～2 周）
 
@@ -421,7 +420,7 @@ azerothcore-wotlk/          分支 Playerbot
 
 ### P2  任务 Job
 
-- [x] `complete_quest`：无手写脚本时从任务模板 + queststarter/ender + 目标生物/掉落表自动展开完整 HTN；`until` 会主动靠近并进攻
+- [x] `complete_quest`：无手写脚本时从任务模板 + queststarter/ender + 目标生物/掉落表自动展开完整 HTN；`until` 会主动靠近并进攻；无世界刷新的召唤击杀走法阵 + `use_item`（StartItem）
 - [x] JSON 脚本加载与热加载（`mybots_quest_script` + payload steps）
 - [x] 先打通 2～3 条新手区任务作为黄金用例（seed SQL）
 - [x] 失败原因写入 `mybots_event`，Web 可展示
@@ -454,12 +453,15 @@ azerothcore-wotlk/          分支 Playerbot
 - [x] 目标不在网格内时回退到 `creature` 静态刷新点，长途才有起点
 - [x] 不再每 tick 重下移动指令（`MyBots.Nav.RepathSec`），消除抽搐
 
-### P4  LLM 规划（明确后置）
+### P4  LLM 规划（模块内 DeepSeek）
 
-- [ ] 与 Job API 相同的 tool schema
-- [ ] 异步快照 → 模型 → `AssignJob`
-- [ ] 幻觉防护：只能选快照里的 GUID/任务
-- [ ] 失败回退 grind/idle，Web 显示「规划失败」
+- [x] 与 Job 执行器相同的 step/op schema（`ensure_selfbot` / `move_to` / `interact` / `gossip_select` / `accept_quest` / `turnin_quest` / `wait` / `until` / `use_item`）
+- [x] 异步：世界线程快照 → LLM 工作线程 → Intent 回投写 steps（不阻塞 `Map::Update`）
+- [x] 幻觉防护：entry 白名单 + questId 校验；禁止裸坐标 `move_to`
+- [x] 失败回退规则规划器（`MyBots.Llm.FallbackRules`）或 `plan_failed`；事件 `llm_plan_*`
+- [x] 卡住/不可达时高层重规划（`MyBots.Llm.ReplanOnStuck`）：只改后续 HTN steps，不替代 mmap 每 tick 寻路
+
+配置见 `MyBots.Llm.*`（默认关闭）。
 
 ### 明确不做（第一期）
 

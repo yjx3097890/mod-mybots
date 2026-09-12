@@ -41,6 +41,17 @@ public:
     uint32 NavBadPointTtlSec() const { return _navBadPointTtlSec; }
     bool NavUseTravelMgr() const { return _navUseTravelMgr; }
 
+    bool LlmEnable() const { return _llmEnable; }
+    std::string const& LlmBaseUrl() const { return _llmBaseUrl; }
+    std::string const& LlmApiKey() const { return _llmApiKey; }
+    std::string const& LlmModel() const { return _llmModel; }
+    uint32 LlmTimeoutMs() const { return _llmTimeoutMs; }
+    bool LlmFallbackRules() const { return _llmFallbackRules; }
+    uint32 LlmMaxSteps() const { return _llmMaxSteps; }
+    bool LlmReplanOnStuck() const { return _llmReplanOnStuck; }
+    uint32 LlmReplanCooldownSec() const { return _llmReplanCooldownSec; }
+    uint32 LlmReplanMax() const { return _llmReplanMax; }
+
 private:
     MyBotsConfig() = default;
 
@@ -69,6 +80,16 @@ private:
     float _navBadPointRadius = 6.f;
     uint32 _navBadPointTtlSec = 900;
     bool _navUseTravelMgr = true;
+    bool _llmEnable = false;
+    std::string _llmBaseUrl = "https://api.deepseek.com";
+    std::string _llmApiKey;
+    std::string _llmModel = "deepseek-chat";
+    uint32 _llmTimeoutMs = 60000;
+    bool _llmFallbackRules = true;
+    uint32 _llmMaxSteps = 32;
+    bool _llmReplanOnStuck = true;
+    uint32 _llmReplanCooldownSec = 90;
+    uint32 _llmReplanMax = 2;
 };
 
 #define sMyBotsConfig MyBotsConfig::Instance()

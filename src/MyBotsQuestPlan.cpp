@@ -3,10 +3,15 @@
 #include "MyBotsExecutor.h"
 
 #include "DatabaseEnv.h"
+#include "GameObjectData.h"
+#include "ItemTemplate.h"
 #include "Log.h"
 #include "ObjectMgr.h"
 #include "QueryResult.h"
 #include "QuestDef.h"
+#include "SharedDefines.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 
 #ifdef MYBOTS_HAVE_TRAVELMGR
 #include "Playerbots.h"
@@ -14,6 +19,8 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
+#include <unordered_set>
 
 namespace
 {
@@ -84,6 +91,123 @@ bool QuestHasKillOrItemObjectives(Quest const* quest)
             return true;
     return false;
 }
+
+bool CreatureHasWorldSpawn(uint32 entry)
+{
+    if (!entry)
+        return false;
+    for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
+        if (data.id == entry)
+            return true;
+    return false;
+}
+
+bool FindCreatureSpawnNear(uint32 entry, float& x, float& y, float& z, uint16& mapId)
+{
+    if (!entry)
+        return false;
+    for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
+    {
+        if (data.id != entry)
+            continue;
+        // Prefer the first spawn; callers only need a reference point near the quest hub.
+        x = data.posX;
+        y = data.posY;
+        z = data.posZ;
+        mapId = data.mapid;
+        return true;
+    }
+    return false;
+}
+
+uint32 SpellFocusForItem(uint32 itemId)
+{
+    ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
+    if (!proto)
+        return 0;
+    for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+    {
+        uint32 const spellId = proto->Spells[i].SpellId;
+        if (!spellId)
+            continue;
+        if (SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId))
+            if (info->RequiresSpellFocus)
+                return info->RequiresSpellFocus;
+    }
+    return 0;
+}
+
+bool FindSummonSiteNear(uint32 focusId, uint16 mapId, float refX, float refY, float& x, float& y, float& z)
+{
+    std::unordered_set<uint32> goEntries;
+    if (GameObjectTemplateContainer const* all = sObjectMgr->GetGameObjectTemplates())
+    {
+        for (auto const& [entry, go] : *all)
+        {
+            if (go.type != GAMEOBJECT_TYPE_SPELLFOCUS)
+                continue;
+            if (focusId && go.spellFocus.focusId != focusId)
+                continue;
+            // Without a focus id, only take named summoning circles (warlock Binding etc.).
+            if (!focusId)
+            {
+                std::string const& n = go.name;
+                if (n.find("Summoning Circle") == std::string::npos
+                    && n.find("Summoning Portal") == std::string::npos
+                    && n.find("Rune of Summoning") == std::string::npos)
+                    continue;
+            }
+            goEntries.insert(entry);
+        }
+    }
+    if (goEntries.empty())
+        return false;
+
+    float best = -1.f;
+    for (auto const& [spawnId, data] : sObjectMgr->GetAllGOData())
+    {
+        if (data.mapid != mapId || !goEntries.count(data.id))
+            continue;
+        float const dx = data.posX - refX;
+        float const dy = data.posY - refY;
+        float const d = dx * dx + dy * dy;
+        if (best < 0.f || d < best)
+        {
+            best = d;
+            x = data.posX;
+            y = data.posY;
+            z = data.posZ;
+        }
+    }
+    return best >= 0.f;
+}
+
+void ResolveSummonSite(MyBotsQuestPlan& plan)
+{
+    if (!plan.HasSummonedObjective())
+        return;
+
+    if (!plan.useItemId)
+        if (Quest const* quest = sObjectMgr->GetQuestTemplate(plan.questId))
+            plan.useItemId = quest->GetSrcItemId();
+
+    uint32 const focusId = SpellFocusForItem(plan.useItemId);
+    uint32 const anchor = plan.turninEntry ? plan.turninEntry : plan.giverEntry;
+    float refX = 0.f, refY = 0.f, refZ = 0.f;
+    uint16 mapId = 0;
+    if (anchor && FindCreatureSpawnNear(anchor, refX, refY, refZ, mapId))
+    {
+        if (FindSummonSiteNear(focusId, mapId, refX, refY, plan.summonX, plan.summonY, plan.summonZ))
+            plan.hasSummonSite = true;
+    }
+
+    // Fallback: any summoning circle on the same map as the character's hub NPC.
+    if (!plan.hasSummonSite && mapId)
+    {
+        if (FindSummonSiteNear(0, mapId, refX, refY, plan.summonX, plan.summonY, plan.summonZ))
+            plan.hasSummonSite = true;
+    }
+}
 } // namespace
 
 MyBotsQuestPlan MyBotsQuestPlanner::Resolve(uint32 questId, std::string const& payload)
@@ -117,7 +241,13 @@ MyBotsQuestPlan MyBotsQuestPlanner::Resolve(uint32 questId, std::string const& p
         if (quest->RequiredNpcOrGoCount[i] == 0)
             continue;
         if (req > 0)
-            AddUnique(plan.objectiveEntries, uint32(req));
+        {
+            uint32 const entry = uint32(req);
+            AddUnique(plan.objectiveEntries, entry);
+            // No creature table row ⇒ must be summoned (Binding voidwalker 5676, etc.).
+            if (!CreatureHasWorldSpawn(entry))
+                AddUnique(plan.summonedEntries, entry);
+        }
         else if (req < 0)
             plan.hasObjectives = true; // GO objective — until still needed
     }
@@ -189,9 +319,17 @@ MyBotsQuestPlan MyBotsQuestPlanner::Resolve(uint32 questId, std::string const& p
     if (!plan.objectiveEntries.empty())
         plan.hasObjectives = true;
 
+    if (plan.HasSummonedObjective())
+    {
+        plan.useItemId = quest->GetSrcItemId();
+        ResolveSummonSite(plan);
+    }
+
     LOG_INFO("module.mybots",
-        "MyBots quest plan {}: giver={} turnin={} objectives={} hasObj={} speak={}",
+        "MyBots quest plan {}: giver={} turnin={} objectives={} summoned={} useItem={} "
+        "summonSite={} hasObj={} speak={}",
         questId, plan.giverEntry, plan.turninEntry, plan.objectiveEntries.size(),
+        plan.summonedEntries.size(), plan.useItemId, plan.hasSummonSite ? 1 : 0,
         plan.hasObjectives ? 1 : 0, plan.speakObjective ? 1 : 0);
 
     return plan;

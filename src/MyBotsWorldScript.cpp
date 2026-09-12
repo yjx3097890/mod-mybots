@@ -2,6 +2,7 @@
 #include "MyBotsHttpServer.h"
 #include "MyBotsIntentQueue.h"
 #include "MyBotsJob.h"
+#include "MyBotsLlm.h"
 
 #include "Log.h"
 #include "ScriptMgr.h"
@@ -33,10 +34,12 @@ public:
 
         LOG_INFO("module.mybots", "mod-mybots started (Selfbot + Job director)");
         MyBotsHttpServer::Start();
+        MyBotsLlm::Start();
     }
 
     void OnShutdown() override
     {
+        MyBotsLlm::Stop();
         MyBotsHttpServer::Stop();
     }
 

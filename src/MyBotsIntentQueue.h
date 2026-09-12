@@ -27,7 +27,11 @@ enum class MyBotsIntentOp
     QuestLog,
     QuestsAvailable,
     UpsertPatrol,
-    ListPatrols
+    ListPatrols,
+    ApplyLlmPlan,
+    ApplyRuleFallback,
+    FailPlan,
+    PlanDryRun
 };
 
 struct MyBotsIntent

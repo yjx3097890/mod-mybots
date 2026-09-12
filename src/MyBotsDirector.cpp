@@ -1,6 +1,7 @@
 #include "MyBotsDirector.h"
 #include "MyBotsExecutor.h"
 #include "MyBotsJob.h"
+#include "MyBotsLlm.h"
 #include "MyBotsNav.h"
 #include "MyBotsQuestPlan.h"
 #include "MyBotsUtil.h"
@@ -177,7 +178,7 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
         {
             MyBotsJobStep m;
             m.op = "move_to";
-            m.detail = "{\"entry\":" + std::to_string(plan.giverEntry) + "}";
+            m.detail = "{\"entry\":" + std::to_string(plan.giverEntry) + ",\"dist\":8}";
             steps.push_back(m);
             MyBotsJobStep a;
             a.op = "accept_quest";
@@ -198,12 +199,46 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
     // skip until and go straight to the turn-in NPC.
     if (plan.hasObjectives && !readyToTurnIn && !alreadyRewarded)
     {
-        for (uint32 entry : plan.objectiveEntries)
+        if (plan.HasSummonedObjective())
         {
-            MyBotsJobStep m;
-            m.op = "move_to";
-            m.detail = "{\"entry\":" + std::to_string(entry) + ",\"dist\":25}";
-            steps.push_back(m);
+            // Binding-style: walk to the summoning circle (or turn-in hub), use the
+            // quest StartItem, then until the summoned creature is dead. Never
+            // move_to the summoned entry — it has no world spawn.
+            if (plan.hasSummonSite)
+            {
+                MyBotsJobStep m;
+                m.op = "move_to";
+                std::ostringstream d;
+                d << "{\"x\":" << plan.summonX << ",\"y\":" << plan.summonY
+                  << ",\"z\":" << plan.summonZ << ",\"dist\":3}";
+                m.detail = d.str();
+                steps.push_back(m);
+            }
+            else if (plan.turninEntry || plan.giverEntry)
+            {
+                uint32 const anchor = plan.turninEntry ? plan.turninEntry : plan.giverEntry;
+                MyBotsJobStep m;
+                m.op = "move_to";
+                m.detail = "{\"entry\":" + std::to_string(anchor) + ",\"dist\":8}";
+                steps.push_back(m);
+            }
+            if (plan.useItemId)
+            {
+                MyBotsJobStep u;
+                u.op = "use_item";
+                u.detail = "{\"itemId\":" + std::to_string(plan.useItemId) + "}";
+                steps.push_back(u);
+            }
+        }
+        else
+        {
+            for (uint32 entry : plan.objectiveEntries)
+            {
+                MyBotsJobStep m;
+                m.op = "move_to";
+                m.detail = "{\"entry\":" + std::to_string(entry) + ",\"dist\":25}";
+                steps.push_back(m);
+            }
         }
 
         MyBotsJobStep until;
@@ -212,6 +247,11 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
         detail << "{\"questId\":" << questId;
         if (plan.speakObjective)
             detail << ",\"speak\":1";
+        if (plan.useItemId)
+            detail << ",\"useItemId\":" << plan.useItemId;
+        if (plan.hasSummonSite)
+            detail << ",\"x\":" << plan.summonX << ",\"y\":" << plan.summonY
+                   << ",\"z\":" << plan.summonZ;
         if (!plan.objectiveEntries.empty())
         {
             detail << ",\"entries\":[";
@@ -234,7 +274,7 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
         {
             MyBotsJobStep m;
             m.op = "move_to";
-            m.detail = "{\"entry\":" + std::to_string(plan.turninEntry) + "}";
+            m.detail = "{\"entry\":" + std::to_string(plan.turninEntry) + ",\"dist\":8}";
             steps.push_back(m);
         }
         MyBotsJobStep t;
@@ -383,7 +423,7 @@ void MyBotsDirector::TickJob(MyBotsJob& job)
     if (job.status == MyBotsJobStatus::Paused)
         return;
     if (job.status == MyBotsJobStatus::Succeeded || job.status == MyBotsJobStatus::Failed
-        || job.status == MyBotsJobStatus::Cancelled)
+        || job.status == MyBotsJobStatus::Cancelled || job.status == MyBotsJobStatus::Planning)
         return;
 
     Player* player = ObjectAccessor::FindPlayer(ObjectGuid(HighGuid::Player, job.charGuid));
@@ -474,6 +514,11 @@ void MyBotsDirector::TickJob(MyBotsJob& job)
         job.moveIssuedAt = 0;
         job.taxiRetryAt = 0;
         job.questHuntEntry = 0;
+        if (step.op == "use_item")
+        {
+            job.useItemPendingId = 0;
+            job.useItemPendingAt = 0;
+        }
         // until clears grind itself on success; keep flag consistent across steps
         if (step.op != "until")
             job.questGrindEnabled = false;
@@ -481,6 +526,16 @@ void MyBotsDirector::TickJob(MyBotsJob& job)
     }
     else if (outcome.result == MyBotsStepResult::Failed)
     {
+        // High-level LLM replan on nav failure or missing world spawn (summoned NPCs).
+        if ((outcome.detail == "stuck" || outcome.detail == "unreachable"
+                || outcome.detail == "creature_not_found")
+            && MyBotsLlm::TryRequestNavReplan(player, job, outcome.detail))
+        {
+            step.status = MyBotsJobStatus::Failed;
+            step.result = outcome.detail;
+            return;
+        }
+
         step.status = MyBotsJobStatus::Failed;
         job.status = MyBotsJobStatus::Failed;
         job.error = outcome.detail;

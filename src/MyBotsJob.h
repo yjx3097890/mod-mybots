@@ -17,7 +17,8 @@ enum class MyBotsJobStatus : uint8
     Paused,
     Succeeded,
     Failed,
-    Cancelled
+    Cancelled,
+    Planning
 };
 
 inline char const* MyBotsJobStatusName(MyBotsJobStatus s)
@@ -30,6 +31,7 @@ inline char const* MyBotsJobStatusName(MyBotsJobStatus s)
         case MyBotsJobStatus::Succeeded: return "succeeded";
         case MyBotsJobStatus::Failed: return "failed";
         case MyBotsJobStatus::Cancelled: return "cancelled";
+        case MyBotsJobStatus::Planning: return "planning";
     }
     return "unknown";
 }
@@ -42,6 +44,7 @@ inline MyBotsJobStatus MyBotsJobStatusFromName(std::string const& s)
     if (s == "succeeded") return MyBotsJobStatus::Succeeded;
     if (s == "failed") return MyBotsJobStatus::Failed;
     if (s == "cancelled") return MyBotsJobStatus::Cancelled;
+    if (s == "planning") return MyBotsJobStatus::Planning;
     return MyBotsJobStatus::Failed;
 }
 
@@ -105,6 +108,12 @@ struct MyBotsJob
     // until step temporarily enables grind; cleared when the step finishes.
     bool questGrindEnabled = false;
     uint32 questHuntEntry = 0;
+    // LLM high-level replan after nav stuck (runtime).
+    uint32 llmReplanCount = 0;
+    uint32 lastLlmReplanAt = 0;
+    // use_item cast bookkeeping (runtime).
+    uint32 useItemPendingId = 0;
+    uint32 useItemPendingAt = 0;
 };
 
 struct MyBotsPatrol

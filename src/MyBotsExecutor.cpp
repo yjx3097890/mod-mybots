@@ -6,6 +6,7 @@
 #include "MyBotsSelfbot.h"
 #include "MyBotsUtil.h"
 
+#include "Item.h"
 #include "Log.h"
 #include "MotionMaster.h"
 #include "ObjectMgr.h"
@@ -14,6 +15,8 @@
 #include "Playerbots.h"
 #include "QuestDef.h"
 #include "SharedDefines.h"
+#include "Spell.h"
+#include "SpellMgr.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -110,6 +113,13 @@ void ResetNavState(MyBotsJob& job)
 // dropped out, or the re-path interval elapsed.
 // Returns false when no navmesh route exists, so callers can escalate instead of
 // letting the character walk a straight line through walls.
+float Dist2dApprox(float ax, float ay, float bx, float by)
+{
+    float const dx = ax - bx;
+    float const dy = ay - by;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
 bool IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool force)
 {
     uint32 const now = MyBotsNow();
@@ -129,6 +139,17 @@ bool IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool f
     if (!force && sameRequest && driving && job.moveIssuedAt
         && now - job.moveIssuedAt < sMyBotsConfig.NavRepathSec())
         return true;
+
+    // Already close to the last issued mesh target for this request — do not
+    // retarget to a slightly different PrepareWalkTarget (common near NPCs and
+    // the cause of endless circling).
+    if (!force && sameRequest && driving && job.moveIssuedAt)
+    {
+        float const toIssued = Dist2dApprox(player->GetPositionX(), player->GetPositionY(),
+            job.moveTargetX, job.moveTargetY);
+        if (toIssued < 8.f)
+            return true;
+    }
 
     // Rate-limit underground lifts — every-tick teleport=true is pure rubber-band.
     if (!job.lastLiftAt || now - job.lastLiftAt >= 5)
@@ -289,12 +310,26 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
         job.taxiRetryAt = now + sMyBotsConfig.NavTaxiRetrySec();
     }
 
-    if (player->GetDistance(x, y, z) <= dist)
+    if (player->GetDistance(x, y, z) <= dist
+        || player->GetExactDist2d(x, y) <= dist)
     {
         player->StopMoving();
         ResetNavState(job);
         o.result = MyBotsStepResult::Done;
         o.detail = "arrived";
+        return o;
+    }
+
+    // Near the goal but pathfinding keeps failing / detouring: soft-arrive so
+    // turn-in / interact can run instead of orbiting forever.
+    float const near2d = player->GetExactDist2d(x, y);
+    if (near2d <= std::max(dist * 3.f, 12.f) && near2d > dist
+        && job.stuckSince && now - job.stuckSince >= std::max(8u, sMyBotsConfig.StuckTimeoutSec() / 2))
+    {
+        player->StopMoving();
+        ResetNavState(job);
+        o.result = MyBotsStepResult::Done;
+        o.detail = "arrived_soft";
         return o;
     }
 
@@ -478,6 +513,64 @@ MyBotsStepOutcome MyBotsExecutor::Interact(Player* player, uint32 entry)
     return o;
 }
 
+MyBotsStepOutcome MyBotsExecutor::UseItem(Player* player, MyBotsJob& job, uint32 itemId)
+{
+    MyBotsStepOutcome o;
+    if (!itemId)
+    {
+        o.result = MyBotsStepResult::Failed;
+        o.detail = "bad_item";
+        return o;
+    }
+
+    uint32 const now = MyBotsNow();
+    if (job.useItemPendingId == itemId && job.useItemPendingAt)
+    {
+        if (player->IsNonMeleeSpellCast(false))
+        {
+            o.result = MyBotsStepResult::Running;
+            o.detail = "casting";
+            return o;
+        }
+        // Give the cast a moment to start; then treat idle as finished/rejected.
+        if (now - job.useItemPendingAt >= 1)
+        {
+            job.useItemPendingId = 0;
+            job.useItemPendingAt = 0;
+            o.result = MyBotsStepResult::Done;
+            o.detail = "item_used";
+            return o;
+        }
+        o.result = MyBotsStepResult::Running;
+        o.detail = "casting_item";
+        return o;
+    }
+
+    if (player->IsNonMeleeSpellCast(false))
+    {
+        o.result = MyBotsStepResult::Running;
+        o.detail = "casting";
+        return o;
+    }
+
+    Item* item = player->GetItemByEntry(itemId);
+    if (!item)
+    {
+        o.result = MyBotsStepResult::Failed;
+        o.detail = "item_missing";
+        return o;
+    }
+
+    SpellCastTargets targets;
+    targets.SetUnitTarget(player);
+    player->CastItemUseSpell(item, targets, 1, 0);
+    job.useItemPendingId = itemId;
+    job.useItemPendingAt = now;
+    o.result = MyBotsStepResult::Running;
+    o.detail = "casting_item";
+    return o;
+}
+
 MyBotsStepOutcome MyBotsExecutor::GossipSelect(Player* player, uint32 entry, uint32 /*menu*/, uint32 option)
 {
     MyBotsStepOutcome o;
@@ -641,6 +734,8 @@ void MyBotsExecutor::HaltControl(Player* player, MyBotsJob* job)
         job->taxiBoardedAt = 0;
         job->navSpawnEntry = 0;
         job->questHuntEntry = 0;
+        job->useItemPendingId = 0;
+        job->useItemPendingAt = 0;
     }
 }
 
@@ -846,6 +941,51 @@ MyBotsStepOutcome MyBotsExecutor::UntilQuestComplete(Player* player, MyBotsJob& 
         return o;
     }
 
+    // Summoned kill targets (Binding voidwalker): no world spawn. Stand on the
+    // summoning circle and use the quest StartItem until the creature appears.
+    uint32 useItemId = 0;
+    ParseUInt(detail, "useItemId", useItemId);
+    if (!useItemId)
+    {
+        MyBotsQuestPlan const plan = MyBotsQuestPlanner::Resolve(questId, detail);
+        useItemId = plan.useItemId;
+        if (!useItemId && plan.HasSummonedObjective())
+            if (Quest const* q = sObjectMgr->GetQuestTemplate(questId))
+                useItemId = q->GetSrcItemId();
+    }
+
+    float sx = 0.f, sy = 0.f, sz = 0.f;
+    bool haveSite = ParseMoveXYZ(detail, sx, sy, sz);
+    if (!haveSite)
+    {
+        MyBotsQuestPlan const plan = MyBotsQuestPlanner::Resolve(questId, detail);
+        if (plan.hasSummonSite)
+        {
+            sx = plan.summonX;
+            sy = plan.summonY;
+            sz = plan.summonZ;
+            haveSite = true;
+        }
+    }
+    if (haveSite && player->GetExactDist2d(sx, sy) > 4.f)
+    {
+        MyBotsStepOutcome move = MoveTo(player, job, sx, sy, sz, 2.5f);
+        if (move.result == MyBotsStepResult::Failed)
+            return move;
+        o.result = MyBotsStepResult::Running;
+        o.detail = "approaching_summon_site";
+        return o;
+    }
+    if (useItemId)
+    {
+        MyBotsStepOutcome used = UseItem(player, job, useItemId);
+        if (used.result == MyBotsStepResult::Failed && used.detail == "item_missing")
+            return used;
+        o.result = MyBotsStepResult::Running;
+        o.detail = used.detail.empty() ? "summoning" : used.detail;
+        return o;
+    }
+
     // Out of grid range: walk/fly toward the nearest spawn of this entry.
     MyBotsStepOutcome move = MoveToCreature(player, job, hunt, speakObjective ? 8.f : 20.f);
     if (move.result == MyBotsStepResult::Failed)
@@ -903,7 +1043,11 @@ MyBotsStepOutcome MyBotsExecutor::RunStep(Player* player, MyBotsJob& job, std::s
         float x = 0, y = 0, z = 0;
         uint32 entry = 0;
         if (ParseUInt(detail, "entry", entry) && entry)
-            return MoveToCreature(player, job, entry);
+        {
+            float dist = 3.f;
+            ParseFloat(detail, "dist", dist);
+            return MoveToCreature(player, job, entry, dist);
+        }
         if (!ParseMoveXYZ(detail, x, y, z))
         {
             MyBotsStepOutcome o;
@@ -920,6 +1064,14 @@ MyBotsStepOutcome MyBotsExecutor::RunStep(Player* player, MyBotsJob& job, std::s
         uint32 entry = 0;
         ParseUInt(detail, "entry", entry);
         return Interact(player, entry);
+    }
+    if (op == "use_item")
+    {
+        uint32 itemId = 0;
+        ParseUInt(detail, "itemId", itemId);
+        if (!itemId)
+            ParseUInt(detail, "item", itemId);
+        return UseItem(player, job, itemId);
     }
     if (op == "gossip_select")
     {

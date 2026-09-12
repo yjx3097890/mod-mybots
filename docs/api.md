@@ -155,14 +155,27 @@ Body 必含 `type`。可选 `replace`（默认跟 `MyBots.Job.Replace`）。
 
 `giverEntry` / `turninEntry` 可选。不传时模块会从 `creature_queststarter` / `creature_questender`（以及 Playerbots TravelMgr 的任务目的地表）自动解析。
 
-**不传 `steps`、库里也没有 `mybots_quest_script` 时，系统会按任务模板和角色当前任务状态自动生成脚本**：
+**不传 `steps`、库里也没有 `mybots_quest_script` 时**：
+
+- 若 `MyBots.Llm.Enable=1` 且配置了 `MyBots.Llm.ApiKey`：异步调 DeepSeek 规划 steps。Job 先为 `status=planning`，成功后变为 `queued`/`running`；事件 `llm_plan_ok` / `llm_plan_fallback` / `llm_plan_failed`。失败且 `FallbackRules=1` 时回退规则规划器。
+- 执行中若 `move_to` 因 `stuck` / `unreachable` 失败，且 `ReplanOnStuck=1`：Job 再入 `planning`，由 LLM 只改**后续高层 steps**（不发明坐标）；事件 `llm_replan_queued` / `llm_replan_ok` / `llm_replan_failed`。同一 Job 受 `ReplanMax` / `ReplanCooldownSec` 限制。
+- 否则按任务模板和角色当前任务状态**规则展开**：
 
 1. `ensure_selfbot`
-2. 尚未接取：有接任务 NPC → `move_to` + `accept_quest`（**已接过则跳过**，避免从暴风城跑回金郡再接一次）
-3. 有击杀/掉落目标：`move_to` 目标 + `until`（对话/交货类任务没有目标，**跳过 until**）
-4. 未交：`move_to` 交任务 NPC + `turnin_quest`
+2. 尚未接取：有接任务 NPC → `move_to` + `accept_quest`（**已接过则跳过**）
+3. 有击杀/掉落/对话事件目标：`move_to` 目标 + `until`
+4. **召唤击杀**（目标生物无 `creature` 刷新，如术士 1689 虚空行者）：走到召唤法阵 GO → `use_item`（任务 `StartItem`）→ `until`（可再使用物品）→ 交任务。不会对召唤物做 `move_to`
+5. 未交：`move_to` 交任务 NPC + `turnin_quest`
 
-若 body 里带了 `"steps":[...]`，或以 `mybots_quest_script` 手写脚本为准，则不再自动展开。
+若 body 里带了 `"steps":[...]`，或以 `mybots_quest_script` 手写脚本为准，则不走 LLM / 自动展开。
+
+#### LLM 试规划（不派发 Job）
+
+### `POST /v1/characters/{id}/plan`
+
+Body：`{"questId":5929,"giverEntry":11802,"turninEntry":11802}`（与 complete_quest 相同字段）。
+
+返回上下文 + 模型 steps（或 `plan_failed`）。需角色在线；耗时可能接近 `MyBots.Llm.TimeoutMs`。
 
 任务 256（通缉 Chok'sul）这类「交物品」任务，目标生物来自 `creature_questitem` / Playerbots 已解析的掉落表；生成后的 `until.detail` 会带 `"entries":[生物entry,...]`。
 
@@ -284,6 +297,7 @@ Body 必含 `type`。可选 `replace`（默认跟 `MyBots.Job.Replace`）。
 | `turnin_quest` | `{"questId":7,"entry":197}` | 交任务 |
 | `wait` | `{"seconds":5}` | 等待 |
 | `until` | `{"questId":7,"entries":[6]}` | 主动靠近/攻击目标直至任务完成；`entries` 可由系统自动填 |
+| `use_item` | `{"itemId":6928}` | 使用背包物品（召唤任务的 StartItem 等）；引导中会保持 running |
 | `revive` | `{}` | 复活 |
 
 ---

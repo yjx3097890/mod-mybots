@@ -159,3 +159,59 @@ MyBots.Nav.BadPointTtlSec = 900
 # 本模块不会写入 TravelMgr；若 mod-playerbots 没有该接口则编译期自动关闭。
 # Default / 默认: 1
 MyBots.Nav.UseTravelMgr = 1
+
+###################################################################################################
+#  LLM quest planner (DeepSeek / OpenAI-compatible Chat Completions)
+#  LLM 任务规划（DeepSeek / OpenAI 兼容接口，工作线程调用，不阻塞地图线程）
+###################################################################################################
+
+# Enable async LLM planning for complete_quest when no hand-written steps/script
+# 开启后：complete_quest 无手写 steps / DB 脚本时，先异步调 LLM 规划再执行
+# Default / 默认: 0
+MyBots.Llm.Enable = 0
+
+# API base URL (OpenAI-compatible). Path /chat/completions is appended.
+# API 基址（OpenAI 兼容）。自动追加 /chat/completions。
+# Default / 默认: "https://api.deepseek.com"
+MyBots.Llm.BaseUrl = "https://api.deepseek.com"
+
+# Bearer API key (required when Enable = 1)
+# Bearer API Key（Enable=1 时必填）
+# Default / 默认: ""
+MyBots.Llm.ApiKey = ""
+
+# Model name
+# 模型名（可改为 deepseek-flash / deepseek-v4-pro 等）
+# Default / 默认: "deepseek-chat"
+MyBots.Llm.Model = "deepseek-chat"
+
+# Outbound HTTP timeout (ms)
+# 出站请求超时（毫秒）
+# Default / 默认: 60000
+MyBots.Llm.TimeoutMs = 60000
+
+# On LLM/validate failure, fall back to the rule-based BuildCompleteQuest planner
+# LLM/校验失败时回退到规则规划器
+# Default / 默认: 1
+MyBots.Llm.FallbackRules = 1
+
+# Max steps accepted from the model
+# 模型返回的最大步数
+# Default / 默认: 32
+MyBots.Llm.MaxSteps = 32
+
+# When move_to fails with stuck/unreachable, ask the LLM for a high-level
+# alternate plan (different NPCs / wait / interact) — not tick-level pathfinding.
+# 卡住/不可达时让 LLM 做高层改道（换 NPC/等待/对话），不替代每 tick 网格寻路。
+# Default / 默认: 1
+MyBots.Llm.ReplanOnStuck = 1
+
+# Minimum seconds between two LLM replans on the same job
+# 同一 Job 两次 LLM 重规划的最小间隔（秒）
+# Default / 默认: 90
+MyBots.Llm.ReplanCooldownSec = 90
+
+# Max LLM replans per job (after initial plan)
+# 每个 Job 最多 LLM 重规划次数（不含首次规划）
+# Default / 默认: 2
+MyBots.Llm.ReplanMax = 2

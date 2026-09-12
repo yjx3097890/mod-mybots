@@ -3,6 +3,7 @@
 #include "MyBotsDirector.h"
 #include "MyBotsExecutor.h"
 #include "MyBotsJob.h"
+#include "MyBotsLlm.h"
 #include "MyBotsQuests.h"
 #include "MyBotsSelfbot.h"
 #include "MyBotsUtil.h"
@@ -13,6 +14,7 @@
 #include "Player.h"
 #include "WorldSession.h"
 
+#include <algorithm>
 #include <chrono>
 #include <sstream>
 
@@ -195,6 +197,34 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
             else if (intent.replace || sMyBotsConfig.JobReplace())
                 sMyBotsJobStore.CancelActive(guid, "replaced");
 
+            if (intent.jobType == "complete_quest")
+            {
+                uint32 questId = 0;
+                MyBotsExecutor::ParseUInt(intent.payload, "questId", questId);
+                if (!questId)
+                    MyBotsExecutor::ParseUInt(intent.payload, "quest_id", questId);
+                if (MyBotsLlm::ShouldPlanCompleteQuest(questId, intent.payload))
+                {
+                    std::vector<MyBotsJobStep> placeholder;
+                    MyBotsJobStep ensure;
+                    ensure.op = "ensure_selfbot";
+                    ensure.detail = "{}";
+                    placeholder.push_back(ensure);
+                    auto job = sMyBotsJobStore.Create(guid, accountId, intent.jobType, intent.payload,
+                        std::move(placeholder));
+                    job->status = MyBotsJobStatus::Planning;
+                    sMyBotsJobStore.Save(*job);
+                    std::string context = MyBotsLlm::BuildPlanContext(player, questId, intent.payload);
+                    MyBotsLlm::EnqueuePlan(job->id, guid, questId, std::move(context));
+                    sMyBotsJobStore.AppendEvent(guid, job->id, "llm_plan_queued",
+                        "quest:" + std::to_string(questId));
+                    finish(202, "{\"ok\":true,\"code\":\"planning\",\"jobId\":\""
+                        + MyBotsJsonEscapeCopy(job->id) + "\",\"job\":"
+                        + MyBotsDirector::JobToJson(*job) + "}");
+                    return;
+                }
+            }
+
             auto steps = MyBotsDirector::BuildStepsForAssign(intent.jobType, intent.payload, player);
             if (steps.size() <= 1)
             {
@@ -204,6 +234,185 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
             auto job = sMyBotsJobStore.Create(guid, accountId, intent.jobType, intent.payload, std::move(steps));
             finish(202, "{\"ok\":true,\"code\":\"accepted\",\"jobId\":\"" + MyBotsJsonEscapeCopy(job->id)
                 + "\",\"job\":" + MyBotsDirector::JobToJson(*job) + "}");
+            return;
+        }
+        case MyBotsIntentOp::ApplyLlmPlan:
+        {
+            auto job = sMyBotsJobStore.Get(intent.jobId);
+            if (!job || job->status != MyBotsJobStatus::Planning)
+            {
+                finish(200, "{\"ok\":false,\"code\":\"ignored\"}");
+                return;
+            }
+            uint32 questId = 0;
+            MyBotsExecutor::ParseUInt(job->payload, "questId", questId);
+            if (!questId)
+                MyBotsExecutor::ParseUInt(job->payload, "quest_id", questId);
+
+            bool const replan = intent.payload.find("\"replan\":1") != std::string::npos
+                || intent.payload.find("\"replan\":true") != std::string::npos;
+
+            std::string validateCtx = replan ? "{\"allowedEntries\":[],\"replan\":true}"
+                                             : "{\"allowedEntries\":[]}";
+            auto parsed = MyBotsLlm::ValidateAndParseSteps(questId, validateCtx, intent.payload);
+            bool const tooThin = replan ? parsed.steps.empty() : (parsed.steps.size() <= 1);
+            if (!parsed.ok || tooThin)
+            {
+                if (!replan && sMyBotsConfig.LlmFallbackRules())
+                {
+                    auto steps = MyBotsDirector::BuildCompleteQuest(questId, job->payload, player);
+                    if (steps.size() > 1)
+                    {
+                        job->steps = std::move(steps);
+                        for (size_t i = 0; i < job->steps.size(); ++i)
+                            job->steps[i].ordinal = static_cast<int>(i);
+                        job->stepIndex = 0;
+                        job->status = MyBotsJobStatus::Queued;
+                        job->error.clear();
+                        sMyBotsJobStore.Save(*job);
+                        sMyBotsJobStore.AppendEvent(job->charGuid, job->id, "llm_plan_fallback",
+                            parsed.error.empty() ? "apply_parse_failed" : parsed.error);
+                        finish(200, "{\"ok\":true,\"code\":\"fallback\"}");
+                        return;
+                    }
+                }
+                job->status = MyBotsJobStatus::Failed;
+                job->error = replan ? "replan_failed" : "plan_failed";
+                sMyBotsJobStore.Save(*job);
+                sMyBotsJobStore.AppendEvent(job->charGuid, job->id,
+                    replan ? "llm_replan_failed" : "llm_plan_failed", parsed.error);
+                finish(200, "{\"ok\":false,\"code\":\"plan_failed\"}");
+                return;
+            }
+
+            if (replan)
+            {
+                // Keep finished prefix; replace from the failed step onward.
+                int const from = std::max(0, job->stepIndex);
+                std::vector<MyBotsJobStep> merged;
+                merged.reserve(static_cast<size_t>(from) + parsed.steps.size());
+                for (int i = 0; i < from && i < static_cast<int>(job->steps.size()); ++i)
+                {
+                    auto s = job->steps[static_cast<size_t>(i)];
+                    s.status = MyBotsJobStatus::Succeeded;
+                    merged.push_back(std::move(s));
+                }
+                for (auto& s : parsed.steps)
+                {
+                    s.status = MyBotsJobStatus::Queued;
+                    s.result.clear();
+                    merged.push_back(std::move(s));
+                }
+                job->steps = std::move(merged);
+                for (size_t i = 0; i < job->steps.size(); ++i)
+                    job->steps[i].ordinal = static_cast<int>(i);
+                job->stepIndex = from;
+                job->navAttempts = 0;
+                job->detourUntil = 0;
+                job->stuckSince = 0;
+                job->moveIssuedAt = 0;
+                job->status = MyBotsJobStatus::Queued;
+                job->error.clear();
+                sMyBotsJobStore.Save(*job);
+                sMyBotsJobStore.AppendEvent(job->charGuid, job->id, "llm_replan_ok",
+                    "steps:" + std::to_string(parsed.steps.size()));
+                finish(200, "{\"ok\":true,\"code\":\"replanned\"}");
+                return;
+            }
+
+            job->steps = std::move(parsed.steps);
+            for (size_t i = 0; i < job->steps.size(); ++i)
+                job->steps[i].ordinal = static_cast<int>(i);
+            job->stepIndex = 0;
+            job->status = MyBotsJobStatus::Queued;
+            job->error.clear();
+            sMyBotsJobStore.Save(*job);
+            sMyBotsJobStore.AppendEvent(job->charGuid, job->id, "llm_plan_ok",
+                "steps:" + std::to_string(job->steps.size()));
+            finish(200, "{\"ok\":true}");
+            return;
+        }
+        case MyBotsIntentOp::ApplyRuleFallback:
+        {
+            auto job = sMyBotsJobStore.Get(intent.jobId);
+            if (!job || job->status != MyBotsJobStatus::Planning)
+            {
+                finish(200, "{\"ok\":false,\"code\":\"ignored\"}");
+                return;
+            }
+            uint32 questId = 0;
+            MyBotsExecutor::ParseUInt(job->payload, "questId", questId);
+            if (!questId)
+                MyBotsExecutor::ParseUInt(job->payload, "quest_id", questId);
+            auto steps = MyBotsDirector::BuildCompleteQuest(questId, job->payload, player);
+            if (steps.size() <= 1)
+            {
+                job->status = MyBotsJobStatus::Failed;
+                job->error = "plan_failed";
+                sMyBotsJobStore.Save(*job);
+                sMyBotsJobStore.AppendEvent(job->charGuid, job->id, "llm_plan_failed", "fallback_empty");
+                finish(200, "{\"ok\":false}");
+                return;
+            }
+            job->steps = std::move(steps);
+            for (size_t i = 0; i < job->steps.size(); ++i)
+                job->steps[i].ordinal = static_cast<int>(i);
+            job->stepIndex = 0;
+            job->status = MyBotsJobStatus::Queued;
+            job->error.clear();
+            sMyBotsJobStore.Save(*job);
+            std::string reason = "llm_failed";
+            auto errPos = intent.payload.find("\"error\"");
+            if (errPos != std::string::npos)
+            {
+                auto q1 = intent.payload.find('"', intent.payload.find(':', errPos) + 1);
+                auto q2 = intent.payload.find('"', q1 + 1);
+                if (q1 != std::string::npos && q2 != std::string::npos)
+                    reason = intent.payload.substr(q1 + 1, q2 - q1 - 1);
+            }
+            sMyBotsJobStore.AppendEvent(job->charGuid, job->id, "llm_plan_fallback", reason);
+            finish(200, "{\"ok\":true,\"code\":\"fallback\"}");
+            return;
+        }
+        case MyBotsIntentOp::FailPlan:
+        {
+            auto job = sMyBotsJobStore.Get(intent.jobId);
+            if (!job || job->status != MyBotsJobStatus::Planning)
+            {
+                finish(200, "{\"ok\":false,\"code\":\"ignored\"}");
+                return;
+            }
+            job->status = MyBotsJobStatus::Failed;
+            job->error = "plan_failed";
+            sMyBotsJobStore.Save(*job);
+            std::string reason = "plan_failed";
+            auto errPos = intent.payload.find("\"error\"");
+            if (errPos != std::string::npos)
+            {
+                auto q1 = intent.payload.find('"', intent.payload.find(':', errPos) + 1);
+                auto q2 = intent.payload.find('"', q1 + 1);
+                if (q1 != std::string::npos && q2 != std::string::npos)
+                    reason = intent.payload.substr(q1 + 1, q2 - q1 - 1);
+            }
+            sMyBotsJobStore.AppendEvent(job->charGuid, job->id, "llm_plan_failed", reason);
+            finish(200, "{\"ok\":true}");
+            return;
+        }
+        case MyBotsIntentOp::PlanDryRun:
+        {
+            uint32 questId = 0;
+            MyBotsExecutor::ParseUInt(intent.payload, "questId", questId);
+            if (!questId)
+                MyBotsExecutor::ParseUInt(intent.payload, "quest_id", questId);
+            if (!questId)
+            {
+                finish(400, "{\"ok\":false,\"code\":\"bad_request\",\"message\":\"questId required\"}");
+                return;
+            }
+            std::string context = MyBotsLlm::BuildPlanContext(player, questId, intent.payload);
+            // Return context immediately; HTTP thread runs PlanSync with long timeout.
+            finish(200, "{\"ok\":true,\"code\":\"context\",\"questId\":" + std::to_string(questId)
+                + ",\"context\":" + context + "}");
             return;
         }
         case MyBotsIntentOp::CancelJob:

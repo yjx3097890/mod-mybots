@@ -95,6 +95,31 @@ namespace
         return (ProbeNearbyPathType(player) & PATHFIND_NOT_USING_PATH) == 0;
     }
 
+    // Reject fake "paths": NOT_USING_PATH straight lines, SHORTCUT, or a 2-point
+    // segment that is basically crow-flies over a long distance (walks through
+    // walls/terrain and then circles when the generator gives up near the NPC).
+    bool IsCredibleMeshPath(PathGenerator const& gen, Player* player, float destX, float destY, bool requireMesh)
+    {
+        uint32 const type = gen.GetPathType();
+        if (requireMesh && (type & PATHFIND_NOT_USING_PATH))
+            return false;
+        if (requireMesh && (type & PATHFIND_SHORTCUT))
+            return false;
+        if (requireMesh && (type & PATHFIND_SHORT))
+            return false;
+        if (!(type & (PATHFIND_NORMAL | PATHFIND_INCOMPLETE)))
+            return false;
+
+        Movement::PointsArray const& path = gen.GetPath();
+        if (requireMesh && path.size() <= 2)
+        {
+            float const crow = Dist2d(player->GetPositionX(), player->GetPositionY(), destX, destY);
+            if (crow > 20.f)
+                return false;
+        }
+        return true;
+    }
+
     // The destination sits outside the loaded navmesh. Instead of cutting a
     // straight line across the world, aim at the farthest point along the way
     // that still has a real route; mmap tiles load as we travel and later ticks
@@ -127,10 +152,7 @@ namespace
             if (!gen.CalculatePath(cx, cy, cz, /*forceDest=*/false))
                 continue;
 
-            uint32 const type = gen.GetPathType();
-            if (type & PATHFIND_NOT_USING_PATH)
-                continue;
-            if (!(type & (PATHFIND_NORMAL | PATHFIND_INCOMPLETE)))
+            if (!IsCredibleMeshPath(gen, player, cx, cy, true))
                 continue;
 
             outX = cx;
@@ -294,11 +316,11 @@ bool MyBotsNav::PrepareWalkTarget(Player* player, float& x, float& y, float& z)
         if (!gen.CalculatePath(reqX, reqY, candidateZ, /*forceDest=*/false))
             return;
 
-        uint32 const type = gen.GetPathType();
-        if (requireMesh && (type & PATHFIND_NOT_USING_PATH))
+        if (!IsCredibleMeshPath(gen, player, reqX, reqY, requireMesh))
             return;
 
-        bool const isNormal = (type & PATHFIND_NORMAL) != 0;
+        uint32 const type = gen.GetPathType();
+        bool const isNormal = (type & PATHFIND_NORMAL) != 0 && (type & PATHFIND_INCOMPLETE) == 0;
         bool const isIncomplete = (type & PATHFIND_INCOMPLETE) != 0;
         if (!isNormal && !isIncomplete)
             return;
@@ -362,6 +384,25 @@ bool MyBotsNav::PrepareWalkTarget(Player* player, float& x, float& y, float& z)
 
     if (!foundAny)
         return requireMesh && ApproachWaypoint(player, reqX, reqY, x, y, z);
+
+    // Incomplete-only result over a long hop usually means the mesh ends before
+    // the NPC — aiming at the final XY every tick makes the character walk a
+    // straight segment then orbit. Prefer a reachable mid waypoint instead.
+    if (requireMesh && !foundNormal)
+    {
+        float const crow = Dist2d(player->GetPositionX(), player->GetPositionY(), reqX, reqY);
+        if (crow > 40.f)
+        {
+            float ax = 0.f, ay = 0.f, az = 0.f;
+            if (ApproachWaypoint(player, reqX, reqY, ax, ay, az))
+            {
+                x = ax;
+                y = ay;
+                z = az;
+                return true;
+            }
+        }
+    }
 
     x = reqX;
     y = reqY;
