@@ -314,7 +314,8 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
     // (hearthstone / boat / portal) instead of walking a straight line across
     // the current map toward coordinates that mean nothing here. Once we land
     // on the target map, fall through to normal same-map navmesh movement.
-    if (targetMap && targetMap != player->GetMapId())
+    // NOTE: map 0 (Eastern Kingdoms) is a valid pin — do not treat 0 as "unset".
+    if (targetMap != MAP_UNSPECIFIED && targetMap != player->GetMapId())
     {
         std::string td;
         switch (MyBotsTravel::AdvanceCrossMap(player, job, targetMap, x, y, z, td))
@@ -1119,8 +1120,8 @@ MyBotsStepOutcome MyBotsExecutor::RunStep(Player* player, MyBotsJob& job, std::s
     {
         float x = 0, y = 0, z = 0;
         uint32 entry = 0;
-        uint32 map = 0;
-        ParseUInt(detail, "map", map);
+        uint32 map = MAP_UNSPECIFIED;
+        ParseUInt(detail, "map", map); // leaves MAP_UNSPECIFIED when key absent
         // Entry-based moves: resolve spawn (any map) and route via MoveToCreature /
         // cross-map. travel_to may also use entry when the LLM names a hub NPC.
         if (ParseUInt(detail, "entry", entry) && entry)
@@ -1214,10 +1215,9 @@ MyBotsStepOutcome MyBotsExecutor::RunStep(Player* player, MyBotsJob& job, std::s
             o.detail = "hearth_casting";
             return o;
         }
-        // Optional: only succeed when we land on a requested map.
-        uint32 wantMap = 0;
-        ParseUInt(detail, "map", wantMap);
-        if (wantMap && player->GetMapId() == wantMap)
+        // Optional: only succeed when we land on a requested map (0 is valid).
+        uint32 wantMap = MAP_UNSPECIFIED;
+        if (ParseUInt(detail, "map", wantMap) && player->GetMapId() == wantMap)
         {
             o.result = MyBotsStepResult::Done;
             o.detail = "already_on_map";

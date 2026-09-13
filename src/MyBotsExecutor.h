@@ -27,11 +27,13 @@ class MyBotsExecutor
 public:
     static MyBotsStepOutcome RunStep(Player* player, MyBotsJob& job, std::string const& op, std::string const& detail);
 
-    // targetMap != 0 pins the destination to a specific map. When the player is
-    // on another map the move is routed cross-map (hearthstone/flight/boat) via
-    // MyBotsTravel instead of walking a straight line off the current map.
+    // targetMap != MAP_UNSPECIFIED pins the destination to a specific map
+    // (including map 0 / Eastern Kingdoms). When the player is on another map
+    // the move is routed cross-map (hearthstone/flight/boat) via MyBotsTravel
+    // instead of walking a straight line off the current map.
+    static constexpr uint32 MAP_UNSPECIFIED = 0xFFFFFFFFu;
     static MyBotsStepOutcome MoveTo(Player* player, MyBotsJob& job, float x, float y, float z, float dist = 2.5f,
-        uint32 targetMap = 0);
+        uint32 targetMap = MAP_UNSPECIFIED);
     static MyBotsStepOutcome MoveToCreature(Player* player, MyBotsJob& job, uint32 entry, float dist = 3.f);
     static MyBotsStepOutcome Interact(Player* player, uint32 entry);
     static MyBotsStepOutcome UseItem(Player* player, MyBotsJob& job, uint32 itemId);
