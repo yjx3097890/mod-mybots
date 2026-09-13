@@ -22,16 +22,22 @@ class MyBotsTravel
 {
 public:
     // Route the player toward (x,y,z) on destMap when they are on a different
-    // map. Rule order (ported from playerbots' travel decisions):
+    // map. Rule order (ported from playerbots' TravelMgr decisions):
     //   1. Hearthstone home when the bind point is on the destination map.
-    //   2. (TODO) Flight-master hops within a continent.
-    //   3. (TODO) Known inter-continent transfers (boat / zeppelin / portal).
-    // Returns Arrived once the player is on destMap.
+    //   2. Walk to the nearest TravelMgr mapTransfer (boat / zeppelin / portal)
+    //      boarding point on the current map, then wait for the transfer.
+    //   3. Fail cleanly — never walk a straight line across the wrong map.
+    // When a transfer approach leg is active, job.travelLeg* is set and the
+    // executor issues same-map navmesh movement toward that point.
     static MyBotsTravelResult AdvanceCrossMap(Player* player, MyBotsJob& job,
         uint32 destMap, float x, float y, float z, std::string& detail);
 
     // Clear cross-map bookkeeping once a leg finishes or the job resets.
     static void Reset(MyBotsJob& job);
+
+    // Fire the hearthstone (playerbots "hearthstone" action, with a direct-cast
+    // fallback). Used by both AdvanceCrossMap and the use_hearthstone op.
+    static bool TriggerHearthstone(Player* player);
 };
 
 #endif

@@ -203,26 +203,35 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
                 MyBotsExecutor::ParseUInt(intent.payload, "questId", questId);
                 if (!questId)
                     MyBotsExecutor::ParseUInt(intent.payload, "quest_id", questId);
+
+                // Hybrid planning: start with rule steps immediately so the bot
+                // begins moving (including cross-map travel_to). If LLM is
+                // enabled, also queue an async plan; when it returns successfully
+                // ApplyLlmPlan replaces the remaining steps. On LLM failure the
+                // rules keep running — no stall in Planning status.
+                auto steps = MyBotsDirector::BuildCompleteQuest(questId, intent.payload, player);
+                if (steps.size() <= 1)
+                {
+                    finish(400, "{\"ok\":false,\"code\":\"bad_job\",\"message\":\"could not build steps for job type\"}");
+                    return;
+                }
+                auto job = sMyBotsJobStore.Create(guid, accountId, intent.jobType, intent.payload,
+                    std::move(steps));
                 if (MyBotsLlm::ShouldPlanCompleteQuest(questId, intent.payload))
                 {
-                    std::vector<MyBotsJobStep> placeholder;
-                    MyBotsJobStep ensure;
-                    ensure.op = "ensure_selfbot";
-                    ensure.detail = "{}";
-                    placeholder.push_back(ensure);
-                    auto job = sMyBotsJobStore.Create(guid, accountId, intent.jobType, intent.payload,
-                        std::move(placeholder));
-                    job->status = MyBotsJobStatus::Planning;
-                    sMyBotsJobStore.Save(*job);
                     std::string context = MyBotsLlm::BuildPlanContext(player, questId, intent.payload);
                     MyBotsLlm::EnqueuePlan(job->id, guid, questId, std::move(context));
                     sMyBotsJobStore.AppendEvent(guid, job->id, "llm_plan_queued",
-                        "quest:" + std::to_string(questId));
-                    finish(202, "{\"ok\":true,\"code\":\"planning\",\"jobId\":\""
+                        "quest:" + std::to_string(questId) + ";rules_first=1");
+                    finish(202, "{\"ok\":true,\"code\":\"accepted\",\"jobId\":\""
                         + MyBotsJsonEscapeCopy(job->id) + "\",\"job\":"
-                        + MyBotsDirector::JobToJson(*job) + "}");
+                        + MyBotsDirector::JobToJson(*job)
+                        + ",\"note\":\"rules_running_llm_pending\"}");
                     return;
                 }
+                finish(202, "{\"ok\":true,\"code\":\"accepted\",\"jobId\":\"" + MyBotsJsonEscapeCopy(job->id)
+                    + "\",\"job\":" + MyBotsDirector::JobToJson(*job) + "}");
+                return;
             }
 
             auto steps = MyBotsDirector::BuildStepsForAssign(intent.jobType, intent.payload, player);
@@ -239,7 +248,11 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
         case MyBotsIntentOp::ApplyLlmPlan:
         {
             auto job = sMyBotsJobStore.Get(intent.jobId);
-            if (!job || job->status != MyBotsJobStatus::Planning)
+            // Accept Planning (legacy) OR Queued/Running (hybrid rules-first).
+            if (!job || (job->status != MyBotsJobStatus::Planning
+                    && job->status != MyBotsJobStatus::Queued
+                    && job->status != MyBotsJobStatus::Running
+                    && job->status != MyBotsJobStatus::Paused))
             {
                 finish(200, "{\"ok\":false,\"code\":\"ignored\"}");
                 return;
@@ -251,13 +264,23 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
 
             bool const replan = intent.payload.find("\"replan\":1") != std::string::npos
                 || intent.payload.find("\"replan\":true") != std::string::npos;
+            bool const hybridLive = job->status != MyBotsJobStatus::Planning;
 
-            std::string validateCtx = replan ? "{\"allowedEntries\":[],\"replan\":true}"
-                                             : "{\"allowedEntries\":[]}";
+            std::string validateCtx = replan || hybridLive
+                ? "{\"allowedEntries\":[],\"replan\":true}"
+                : "{\"allowedEntries\":[]}";
             auto parsed = MyBotsLlm::ValidateAndParseSteps(questId, validateCtx, intent.payload);
-            bool const tooThin = replan ? parsed.steps.empty() : (parsed.steps.size() <= 1);
+            bool const tooThin = (replan || hybridLive) ? parsed.steps.empty() : (parsed.steps.size() <= 1);
             if (!parsed.ok || tooThin)
             {
+                // Hybrid: rules are already running — ignore a failed LLM and keep them.
+                if (hybridLive && !replan)
+                {
+                    sMyBotsJobStore.AppendEvent(job->charGuid, job->id, "llm_plan_ignored",
+                        parsed.error.empty() ? "parse_failed_keep_rules" : parsed.error);
+                    finish(200, "{\"ok\":true,\"code\":\"keep_rules\"}");
+                    return;
+                }
                 if (!replan && sMyBotsConfig.LlmFallbackRules())
                 {
                     auto steps = MyBotsDirector::BuildCompleteQuest(questId, job->payload, player);
@@ -285,16 +308,17 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
                 return;
             }
 
-            if (replan)
+            // Hybrid live OR explicit replan: keep finished prefix, replace remaining.
+            if (replan || hybridLive)
             {
-                // Keep finished prefix; replace from the failed step onward.
                 int const from = std::max(0, job->stepIndex);
                 std::vector<MyBotsJobStep> merged;
                 merged.reserve(static_cast<size_t>(from) + parsed.steps.size());
                 for (int i = 0; i < from && i < static_cast<int>(job->steps.size()); ++i)
                 {
                     auto s = job->steps[static_cast<size_t>(i)];
-                    s.status = MyBotsJobStatus::Succeeded;
+                    if (s.status != MyBotsJobStatus::Succeeded)
+                        s.status = MyBotsJobStatus::Succeeded;
                     merged.push_back(std::move(s));
                 }
                 for (auto& s : parsed.steps)
@@ -311,12 +335,15 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
                 job->detourUntil = 0;
                 job->stuckSince = 0;
                 job->moveIssuedAt = 0;
-                job->status = MyBotsJobStatus::Queued;
+                if (job->status == MyBotsJobStatus::Planning)
+                    job->status = MyBotsJobStatus::Queued;
                 job->error.clear();
                 sMyBotsJobStore.Save(*job);
-                sMyBotsJobStore.AppendEvent(job->charGuid, job->id, "llm_replan_ok",
-                    "steps:" + std::to_string(parsed.steps.size()));
-                finish(200, "{\"ok\":true,\"code\":\"replanned\"}");
+                sMyBotsJobStore.AppendEvent(job->charGuid, job->id,
+                    replan ? "llm_replan_ok" : "llm_plan_ok",
+                    "steps:" + std::to_string(parsed.steps.size())
+                        + (hybridLive ? ";switched_from_rules=1" : ""));
+                finish(200, "{\"ok\":true,\"code\":\"" + std::string(replan ? "replanned" : "switched") + "\"}");
                 return;
             }
 
@@ -335,9 +362,18 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
         case MyBotsIntentOp::ApplyRuleFallback:
         {
             auto job = sMyBotsJobStore.Get(intent.jobId);
-            if (!job || job->status != MyBotsJobStatus::Planning)
+            // Hybrid rules-first: job is already Queued/Running with rule steps —
+            // a late LLM failure must not rewrite or fail it.
+            if (!job)
             {
                 finish(200, "{\"ok\":false,\"code\":\"ignored\"}");
+                return;
+            }
+            if (job->status != MyBotsJobStatus::Planning)
+            {
+                sMyBotsJobStore.AppendEvent(job->charGuid, job->id, "llm_plan_ignored",
+                    "fallback_while_rules_running");
+                finish(200, "{\"ok\":true,\"code\":\"keep_rules\"}");
                 return;
             }
             uint32 questId = 0;
@@ -377,9 +413,16 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
         case MyBotsIntentOp::FailPlan:
         {
             auto job = sMyBotsJobStore.Get(intent.jobId);
-            if (!job || job->status != MyBotsJobStatus::Planning)
+            if (!job)
             {
                 finish(200, "{\"ok\":false,\"code\":\"ignored\"}");
+                return;
+            }
+            if (job->status != MyBotsJobStatus::Planning)
+            {
+                sMyBotsJobStore.AppendEvent(job->charGuid, job->id, "llm_plan_ignored",
+                    "fail_while_rules_running");
+                finish(200, "{\"ok\":true,\"code\":\"keep_rules\"}");
                 return;
             }
             job->status = MyBotsJobStatus::Failed;

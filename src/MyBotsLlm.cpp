@@ -45,12 +45,15 @@ std::queue<PlanRequest> gQueue;
 char const* kSystemPrompt =
     "You are a World of Warcraft (3.3.5) quest HTN planner for mod-mybots.\n"
     "Output ONLY one JSON object: {\"steps\":[{\"op\":\"...\",\"detail\":\"{...}\"}]}\n"
-    "Allowed ops: ensure_selfbot, move_to, interact, gossip_select, accept_quest, "
-    "turnin_quest, wait, until, use_item.\n"
+    "Allowed ops: ensure_selfbot, travel_to, move_to, interact, gossip_select, accept_quest, "
+    "turnin_quest, wait, until, use_item, use_hearthstone.\n"
     "Rules:\n"
     "- First step must be ensure_selfbot with detail {}.\n"
-    "- move_to MUST use creature \"entry\" from allowedEntries. Never invent entries or GUIDs.\n"
-    "- Do NOT use raw x,y,z coordinates.\n"
+    "- If character.map != hints.hubMap, FIRST emit travel_to with map=hints.hubMap and "
+    "x/y/z from hints.hub (or use_hearthstone {\"map\":hubMap} when bind is on that map).\n"
+    "- travel_to is the ONLY op allowed to use raw x,y,z, and only together with \"map\".\n"
+    "- Same-map move_to MUST use creature \"entry\" from allowedEntries. Never invent entries.\n"
+    "- Do NOT use raw x,y,z on move_to.\n"
     "- accept_quest / turnin_quest / until must use the exact questId from the context.\n"
     "- For speak/event objectives (hints.speakObjective=true), prefer move_to entry then until "
     "with speak:1, or interact + gossip_select near that NPC.\n"
@@ -64,17 +67,21 @@ char const* kSystemPrompt =
 char const* kReplanSystemPrompt =
     "You are replanning a World of Warcraft (3.3.5) mod-mybots job after NAVIGATION FAILURE.\n"
     "The low-level navmesh pathfinder already failed (stuck/unreachable/circling). "
-    "Do NOT invent coordinates or fine paths. Only emit HIGH-LEVEL HTN steps.\n"
+    "Do NOT invent fine paths. Only emit HIGH-LEVEL HTN steps.\n"
     "Output ONLY: {\"steps\":[{\"op\":\"...\",\"detail\":\"{...}\"}]}\n"
-    "Allowed ops: move_to, interact, gossip_select, accept_quest, turnin_quest, wait, until, use_item.\n"
+    "Allowed ops: travel_to, move_to, interact, gossip_select, accept_quest, turnin_quest, "
+    "wait, until, use_item, use_hearthstone.\n"
     "Rules:\n"
-    "- Use ONLY creature entries listed in allowedEntries.\n"
+    "- If on the wrong continent (character.map != hints.hubMap), emit travel_to or "
+    "use_hearthstone before any same-map move_to.\n"
+    "- travel_to may use map + x/y/z from hints.hub only.\n"
+    "- Use ONLY creature entries listed in allowedEntries for move_to.\n"
     "- Prefer a different approach than the failed step (other NPC, wait briefly, interact, "
     "speak until, then turn-in).\n"
     "- If hints.summonedObjective=true, use use_item near turninEntry instead of move_to "
     "the summoned creature.\n"
     "- Do NOT repeat accept_quest if character.questStatus is incomplete/complete.\n"
-    "- Do NOT use raw x,y,z. Do NOT invent entries/GUIDs.\n"
+    "- Do NOT invent entries/GUIDs.\n"
     "- Keep the plan short: only what remains to finish the job from the current position.\n"
     "- No markdown, no commentary.";
 
@@ -150,9 +157,10 @@ void CollectAllowedEntries(std::string const& contextJson, std::unordered_set<ui
 
 bool IsAllowedOp(std::string const& op)
 {
-    return op == "ensure_selfbot" || op == "move_to" || op == "interact" || op == "gossip_select"
-        || op == "accept_quest" || op == "turn_in_quest" || op == "turnin_quest" || op == "wait"
-        || op == "until" || op == "use_item";
+    return op == "ensure_selfbot" || op == "move_to" || op == "travel_to" || op == "interact"
+        || op == "gossip_select" || op == "accept_quest" || op == "turn_in_quest" || op == "turnin_quest"
+        || op == "wait" || op == "until" || op == "use_item" || op == "use_hearthstone"
+        || op == "hearthstone";
 }
 
 std::string StripCodeFence(std::string s)
@@ -645,6 +653,8 @@ std::string MyBotsLlm::BuildPlanContext(Player* player, uint32 questId, std::str
     ss << ",\"hints\":{"
        << "\"giverEntry\":" << plan.giverEntry
        << ",\"turninEntry\":" << plan.turninEntry
+       << ",\"hubMap\":" << plan.hubMap
+       << ",\"hub\":{\"x\":" << plan.hubX << ",\"y\":" << plan.hubY << ",\"z\":" << plan.hubZ << "}"
        << ",\"speakObjective\":" << (plan.speakObjective ? "true" : "false")
        << ",\"hasObjectives\":" << (plan.hasObjectives ? "true" : "false")
        << ",\"summonedObjective\":" << (plan.HasSummonedObjective() ? "true" : "false")
@@ -689,8 +699,8 @@ std::string MyBotsLlm::BuildPlanContext(Player* player, uint32 questId, std::str
     }
     ss << "]";
 
-    ss << ",\"allowedOps\":[\"ensure_selfbot\",\"move_to\",\"interact\",\"gossip_select\","
-          "\"accept_quest\",\"turnin_quest\",\"wait\",\"until\",\"use_item\"]";
+    ss << ",\"allowedOps\":[\"ensure_selfbot\",\"travel_to\",\"move_to\",\"interact\",\"gossip_select\","
+          "\"accept_quest\",\"turnin_quest\",\"wait\",\"until\",\"use_item\",\"use_hearthstone\"]";
     if (plan.useItemId)
         ss << ",\"allowedItemIds\":[" << plan.useItemId << "]";
 
@@ -944,6 +954,34 @@ MyBotsLlmPlanResult MyBotsLlm::ValidateAndParseSteps(uint32 questId, std::string
                 result.error = "entry_not_allowed:" + std::to_string(entry);
                 return result;
             }
+        }
+        if (step.op == "travel_to")
+        {
+            uint32 map = 0;
+            MyBotsExecutor::ParseUInt(step.detail, "map", map);
+            float tx = 0.f, ty = 0.f, tz = 0.f;
+            bool const hasXYZ = MyBotsExecutor::ParseMoveXYZ(step.detail, tx, ty, tz);
+            uint32 entry = 0;
+            MyBotsExecutor::ParseUInt(step.detail, "entry", entry);
+            if (!map)
+            {
+                result.error = "travel_to_requires_map";
+                return result;
+            }
+            if (!hasXYZ && !entry)
+            {
+                result.error = "travel_to_requires_xyz_or_entry";
+                return result;
+            }
+            if (entry && !allowed.empty() && !allowed.count(entry))
+            {
+                result.error = "entry_not_allowed:" + std::to_string(entry);
+                return result;
+            }
+        }
+        if (step.op == "use_hearthstone" || step.op == "hearthstone")
+        {
+            // Optional map pin; no further validation required.
         }
         if (step.op == "interact" || step.op == "gossip_select")
         {
