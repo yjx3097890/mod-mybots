@@ -1121,12 +1121,15 @@ MyBotsStepOutcome MyBotsExecutor::RunStep(Player* player, MyBotsJob& job, std::s
         uint32 entry = 0;
         uint32 map = 0;
         ParseUInt(detail, "map", map);
-        // Creature-entry moves are same-map only (grid/spawn lookups need the
-        // current map); travel_to always carries explicit coordinates.
-        if (op == "move_to" && ParseUInt(detail, "entry", entry) && entry)
+        // Entry-based moves: resolve spawn (any map) and route via MoveToCreature /
+        // cross-map. travel_to may also use entry when the LLM names a hub NPC.
+        if (ParseUInt(detail, "entry", entry) && entry)
         {
             float dist = 3.f;
             ParseFloat(detail, "dist", dist);
+            // If map is pinned and differs, MoveToCreature still finds the spawn
+            // on that map via FindNearestSpawnPoint's cross-map fallback.
+            (void)map;
             return MoveToCreature(player, job, entry, dist);
         }
         if (!ParseMoveXYZ(detail, x, y, z))
