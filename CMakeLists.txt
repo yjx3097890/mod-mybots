@@ -62,20 +62,39 @@ endif()
 
 message(STATUS "mod-mybots: using playerbots at ${MYBOTS_PLAYERBOTS_DIR}")
 
-# Optional read-only reuse of playerbots' bad-navmesh knowledge. Only enabled
-# when the installed fork actually exposes the accessors we call, so an older
-# or patched mod-playerbots still compiles.
+# Optional read-only reuse of playerbots' TravelMgr (bad-navmesh + mapTransfers +
+# FindTaxiPath). add_definitions() alone does not always reach the AC `modules`
+# object target when this file is included mid-configure, so also attach the
+# define onto the real targets (deferred if they are not created yet).
+set(MYBOTS_HAVE_TRAVELMGR_FLAG OFF CACHE INTERNAL "mod-mybots TravelMgr define")
 set(MYBOTS_TRAVELMGR_HEADER "${MYBOTS_PLAYERBOTS_DIR}/src/Mgr/Travel/TravelMgr.h")
 if(EXISTS "${MYBOTS_TRAVELMGR_HEADER}")
   file(READ "${MYBOTS_TRAVELMGR_HEADER}" MYBOTS_TRAVELMGR_SRC)
   string(FIND "${MYBOTS_TRAVELMGR_SRC}" "isBadMmap" MYBOTS_TM_HAS_BADMMAP)
   string(FIND "${MYBOTS_TRAVELMGR_SRC}" "define sTravelMgr" MYBOTS_TM_HAS_MACRO)
   if(NOT MYBOTS_TM_HAS_BADMMAP EQUAL -1 AND NOT MYBOTS_TM_HAS_MACRO EQUAL -1)
-    add_definitions(-DMYBOTS_HAVE_TRAVELMGR)
-    message(STATUS "mod-mybots: TravelMgr bad-grid reuse enabled")
+    set(MYBOTS_HAVE_TRAVELMGR_FLAG ON CACHE INTERNAL "mod-mybots TravelMgr define")
+    message(STATUS "mod-mybots: TravelMgr reuse enabled")
   else()
-    message(STATUS "mod-mybots: TravelMgr found but API mismatch, bad-grid reuse disabled")
+    message(STATUS "mod-mybots: TravelMgr found but API mismatch, reuse disabled")
   endif()
 else()
-  message(STATUS "mod-mybots: TravelMgr.h not found, bad-grid reuse disabled")
+  message(STATUS "mod-mybots: TravelMgr.h not found, reuse disabled")
+endif()
+
+function(mybots_attach_travelmgr_define)
+  if(NOT MYBOTS_HAVE_TRAVELMGR_FLAG)
+    return()
+  endif()
+  if(TARGET modules)
+    target_compile_definitions(modules PRIVATE MYBOTS_HAVE_TRAVELMGR)
+  endif()
+  if(TARGET worldserver)
+    target_compile_definitions(worldserver PRIVATE MYBOTS_HAVE_TRAVELMGR)
+  endif()
+endfunction()
+
+mybots_attach_travelmgr_define()
+if(NOT TARGET modules OR NOT TARGET worldserver)
+  cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL mybots_attach_travelmgr_define)
 endif()
