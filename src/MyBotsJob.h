@@ -114,6 +114,18 @@ struct MyBotsJob
     // use_item cast bookkeeping (runtime).
     uint32 useItemPendingId = 0;
     uint32 useItemPendingAt = 0;
+    // Cross-map travel runtime: when a move target lives on another map we route
+    // there via rules (hearthstone / flight / boat) instead of walking a straight
+    // line off the current map. 0xFFFFFFFF means "no cross-map leg active".
+    uint32 travelDestMap = 0xFFFFFFFFu;
+    uint32 travelStage = 0;        // rule cursor: 0=hearth, 1=flight, 2=transfer, ...
+    uint32 travelActionAt = 0;     // last time we issued a travel action (sec)
+    uint32 travelStuckSince = 0;   // cross-map progress watchdog (sec)
+    uint32 hearthCastAt = 0;       // when we last triggered the hearthstone (sec)
+    float travelLegX = 0.f;        // sub-destination for the current leg (e.g. dock)
+    float travelLegY = 0.f;
+    float travelLegZ = 0.f;
+    bool travelLegSet = false;
 };
 
 struct MyBotsPatrol

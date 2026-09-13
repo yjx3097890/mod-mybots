@@ -3,6 +3,7 @@
 #include "MyBotsJob.h"
 #include "MyBotsNav.h"
 #include "MyBotsQuestPlan.h"
+#include "MyBotsTravel.h"
 #include "MyBotsSelfbot.h"
 #include "MyBotsUtil.h"
 
@@ -268,7 +269,8 @@ MyBotsStepOutcome MyBotsExecutor::EnsureSelfbot(Player* player)
     return o;
 }
 
-MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x, float y, float z, float dist)
+MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x, float y, float z, float dist,
+    uint32 targetMap)
 {
     MyBotsStepOutcome o;
     if (!player)
@@ -276,6 +278,31 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
         o.result = MyBotsStepResult::Failed;
         o.detail = "no_player";
         return o;
+    }
+
+    // Cross-map: the destination lives on another map. Route there by rules
+    // (hearthstone/flight/boat) instead of walking a straight line across the
+    // current map toward coordinates that mean nothing here. Once we land on the
+    // target map, fall through to normal same-map navmesh movement.
+    if (targetMap && targetMap != player->GetMapId())
+    {
+        std::string td;
+        switch (MyBotsTravel::AdvanceCrossMap(player, job, targetMap, x, y, z, td))
+        {
+            case MyBotsTravelResult::Advancing:
+                o.result = MyBotsStepResult::Running;
+                o.detail = td;
+                return o;
+            case MyBotsTravelResult::Unreachable:
+                player->StopMoving();
+                o.result = MyBotsStepResult::Failed;
+                o.detail = td;
+                return o;
+            case MyBotsTravelResult::Arrived:
+                MyBotsTravel::Reset(job);
+                ResetNavState(job);
+                break; // resume same-map pathing below
+        }
     }
 
     uint32 const now = MyBotsNow();
@@ -1038,11 +1065,15 @@ MyBotsStepOutcome MyBotsExecutor::RunStep(Player* player, MyBotsJob& job, std::s
 {
     if (op == "ensure_selfbot")
         return EnsureSelfbot(player);
-    if (op == "move_to")
+    if (op == "move_to" || op == "travel_to")
     {
         float x = 0, y = 0, z = 0;
         uint32 entry = 0;
-        if (ParseUInt(detail, "entry", entry) && entry)
+        uint32 map = 0;
+        ParseUInt(detail, "map", map);
+        // Creature-entry moves are same-map only (grid/spawn lookups need the
+        // current map); travel_to always carries explicit coordinates.
+        if (op == "move_to" && ParseUInt(detail, "entry", entry) && entry)
         {
             float dist = 3.f;
             ParseFloat(detail, "dist", dist);
@@ -1057,7 +1088,7 @@ MyBotsStepOutcome MyBotsExecutor::RunStep(Player* player, MyBotsJob& job, std::s
         }
         float dist = 2.5f;
         ParseFloat(detail, "dist", dist);
-        return MoveTo(player, job, x, y, z, dist);
+        return MoveTo(player, job, x, y, z, dist, map);
     }
     if (op == "interact")
     {
