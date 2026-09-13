@@ -68,8 +68,8 @@ void CollectEventCreditCreatures(uint32 questId, std::vector<uint32>& out)
     if (!questId)
         return;
     if (QueryResult result = WorldDatabase.Query(
-            "SELECT DISTINCT entry FROM smart_scripts WHERE source_type = 0 AND "
-            "action_type = 15 AND action_param1 = {}",
+            "SELECT DISTINCT entryorguid FROM smart_scripts WHERE source_type = 0 AND "
+            "entryorguid > 0 AND action_type = 15 AND action_param1 = {}",
             questId))
     {
         do
