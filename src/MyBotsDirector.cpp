@@ -169,6 +169,21 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
     bool const readyToTurnIn = st == QUEST_STATUS_COMPLETE;
     bool const alreadyRewarded = st == QUEST_STATUS_REWARDED;
 
+    // Cross-map: get the character onto the quest hub continent before any
+    // entry-based move_to. travel_to uses map-aware routing (hearthstone /
+    // boat / portal) instead of walking a straight line off the current map.
+    if (player && plan.hasHub && plan.hubMap && plan.hubMap != player->GetMapId())
+    {
+        MyBotsJobStep t;
+        t.op = "travel_to";
+        std::ostringstream d;
+        d << "{\"map\":" << plan.hubMap
+          << ",\"x\":" << plan.hubX << ",\"y\":" << plan.hubY << ",\"z\":" << plan.hubZ
+          << ",\"dist\":8}";
+        t.detail = d.str();
+        steps.push_back(t);
+    }
+
     // Accept only when the character does not already have the quest. Otherwise
     // a speak-quest like 1638 would first run back to the Goldshire trainer
     // while the player is already in Stormwind waiting on Harry.

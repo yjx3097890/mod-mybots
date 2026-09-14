@@ -3,6 +3,7 @@
 #include "MyBotsJob.h"
 #include "MyBotsNav.h"
 #include "MyBotsQuestPlan.h"
+#include "MyBotsTravel.h"
 #include "MyBotsSelfbot.h"
 #include "MyBotsUtil.h"
 
@@ -38,30 +39,60 @@ Creature* FindNearestCreature(Player* player, uint32 entry, float range)
 
 // Grid search only sees loaded creatures. For anything further away we fall
 // back to the static spawn table so a long trip can at least be started.
-bool FindNearestSpawnPoint(Player* player, uint32 entry, float& x, float& y, float& z)
+// Prefer a spawn on the player's current map; otherwise pick any map and let
+// MoveTo's cross-map router (hearthstone / boat / portal) get us there.
+bool FindNearestSpawnPoint(Player* player, uint32 entry, float& x, float& y, float& z, uint32& outMap)
 {
     if (!player || !entry)
         return false;
 
     uint16 const mapId = uint16(player->GetMapId());
-    float best = -1.f;
+    float bestSame = -1.f;
+    float bestAny = -1.f;
+    float ax = 0.f, ay = 0.f, az = 0.f;
+    uint32 aMap = 0;
 
     for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
     {
-        if (data.mapid != mapId || data.id != entry)
+        if (data.id != entry)
             continue;
 
-        float const d = player->GetExactDist2d(data.posX, data.posY);
-        if (best < 0.f || d < best)
+        if (data.mapid == mapId)
         {
-            best = d;
-            x = data.posX;
-            y = data.posY;
-            z = data.posZ;
+            float const d = player->GetExactDist2d(data.posX, data.posY);
+            if (bestSame < 0.f || d < bestSame)
+            {
+                bestSame = d;
+                x = data.posX;
+                y = data.posY;
+                z = data.posZ;
+                outMap = data.mapid;
+            }
+            continue;
+        }
+
+        // Cross-map: no meaningful 2d distance — keep the first alternate.
+        if (bestAny < 0.f)
+        {
+            bestAny = 0.f;
+            ax = data.posX;
+            ay = data.posY;
+            az = data.posZ;
+            aMap = data.mapid;
         }
     }
 
-    return best >= 0.f;
+    if (bestSame >= 0.f)
+        return true;
+    if (bestAny >= 0.f)
+    {
+        x = ax;
+        y = ay;
+        z = az;
+        outMap = aMap;
+        return true;
+    }
+    return false;
 }
 
 bool ParseUIntArray(std::string const& detail, char const* key, std::vector<uint32>& out)
@@ -268,7 +299,8 @@ MyBotsStepOutcome MyBotsExecutor::EnsureSelfbot(Player* player)
     return o;
 }
 
-MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x, float y, float z, float dist)
+MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x, float y, float z, float dist,
+    uint32 targetMap)
 {
     MyBotsStepOutcome o;
     if (!player)
@@ -276,6 +308,39 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
         o.result = MyBotsStepResult::Failed;
         o.detail = "no_player";
         return o;
+    }
+
+    // Cross-map: the destination lives on another map. Route there by rules
+    // (hearthstone / boat / portal) instead of walking a straight line across
+    // the current map toward coordinates that mean nothing here. Once we land
+    // on the target map, fall through to normal same-map navmesh movement.
+    // NOTE: map 0 (Eastern Kingdoms) is a valid pin — do not treat 0 as "unset".
+    if (targetMap != MAP_UNSPECIFIED && targetMap != player->GetMapId())
+    {
+        std::string td;
+        switch (MyBotsTravel::AdvanceCrossMap(player, job, targetMap, x, y, z, td))
+        {
+            case MyBotsTravelResult::Advancing:
+                // Walk to the transfer boarding point on the CURRENT map using
+                // normal navmesh pathing — that is the whole point of the leg.
+                if (job.travelLegSet && (td == "transfer_approach" || td.rfind("transfer_", 0) == 0))
+                {
+                    if (td == "transfer_approach")
+                        IssueMove(player, job, job.travelLegX, job.travelLegY, job.travelLegZ, false);
+                }
+                o.result = MyBotsStepResult::Running;
+                o.detail = td;
+                return o;
+            case MyBotsTravelResult::Unreachable:
+                player->StopMoving();
+                o.result = MyBotsStepResult::Failed;
+                o.detail = td;
+                return o;
+            case MyBotsTravelResult::Arrived:
+                MyBotsTravel::Reset(job);
+                ResetNavState(job);
+                break; // resume same-map pathing below
+        }
     }
 
     uint32 const now = MyBotsNow();
@@ -461,15 +526,17 @@ MyBotsStepOutcome MyBotsExecutor::MoveToCreature(Player* player, MyBotsJob& job,
     if (Creature* c = FindNearestCreature(player, entry, 120.f))
     {
         job.navSpawnEntry = 0;
-        return MoveTo(player, job, c->GetPositionX(), c->GetPositionY(), c->GetPositionZ(), dist);
+        return MoveTo(player, job, c->GetPositionX(), c->GetPositionY(), c->GetPositionZ(), dist,
+            player->GetMapId());
     }
 
-    // Out of grid range: head for the spawn point so the taxi/long-distance
-    // layer can do its work instead of failing the step outright.
+    // Out of grid range (or on another map): head for a spawn point so the
+    // cross-map / taxi layer can do its work instead of failing outright.
     if (job.navSpawnEntry != entry)
     {
         float sx = 0.f, sy = 0.f, sz = 0.f;
-        if (!FindNearestSpawnPoint(player, entry, sx, sy, sz))
+        uint32 spawnMap = 0;
+        if (!FindNearestSpawnPoint(player, entry, sx, sy, sz, spawnMap))
         {
             MyBotsStepOutcome o;
             o.result = MyBotsStepResult::Failed;
@@ -479,18 +546,29 @@ MyBotsStepOutcome MyBotsExecutor::MoveToCreature(Player* player, MyBotsJob& job,
         job.navSpawnEntry = entry;
         job.navSpawnX = sx;
         job.navSpawnY = sy;
-        // The spawn's own Z is authoritative — it is where the creature stands.
-        // Only nudge it onto the surface when the two nearly agree; a large
-        // disagreement means the height lookup found another storey (a tavern
-        // floor vs. the terrain under the city), and following it is how the
-        // character ended up below Stormwind.
-        float const surface = player->GetMapHeight(sx, sy, sz);
-        if (surface > INVALID_HEIGHT && std::fabs(surface - sz) <= 3.f)
-            sz = surface;
+        // Only nudge Z onto the surface when we are already on that map — a
+        // height lookup on the wrong map is meaningless.
+        if (spawnMap == player->GetMapId())
+        {
+            float const surface = player->GetMapHeight(sx, sy, sz);
+            if (surface > INVALID_HEIGHT && std::fabs(surface - sz) <= 3.f)
+                sz = surface;
+        }
         job.navSpawnZ = sz;
+        // Stash the spawn map in travelDestMap-ish via MoveTo's targetMap arg.
+        return MoveTo(player, job, job.navSpawnX, job.navSpawnY, sz, dist, spawnMap);
     }
 
-    return MoveTo(player, job, job.navSpawnX, job.navSpawnY, job.navSpawnZ, dist);
+    // Reuse the cached spawn; we do not know its map from the cache alone, so
+    // re-resolve once if the previous call stored coordinates only.
+    uint32 spawnMap = player->GetMapId();
+    {
+        float sx = 0.f, sy = 0.f, sz = 0.f;
+        uint32 m = 0;
+        if (FindNearestSpawnPoint(player, entry, sx, sy, sz, m))
+            spawnMap = m;
+    }
+    return MoveTo(player, job, job.navSpawnX, job.navSpawnY, job.navSpawnZ, dist, spawnMap);
 }
 
 MyBotsStepOutcome MyBotsExecutor::Interact(Player* player, uint32 entry)
@@ -1038,14 +1116,21 @@ MyBotsStepOutcome MyBotsExecutor::RunStep(Player* player, MyBotsJob& job, std::s
 {
     if (op == "ensure_selfbot")
         return EnsureSelfbot(player);
-    if (op == "move_to")
+    if (op == "move_to" || op == "travel_to")
     {
         float x = 0, y = 0, z = 0;
         uint32 entry = 0;
+        uint32 map = MAP_UNSPECIFIED;
+        ParseUInt(detail, "map", map); // leaves MAP_UNSPECIFIED when key absent
+        // Entry-based moves: resolve spawn (any map) and route via MoveToCreature /
+        // cross-map. travel_to may also use entry when the LLM names a hub NPC.
         if (ParseUInt(detail, "entry", entry) && entry)
         {
             float dist = 3.f;
             ParseFloat(detail, "dist", dist);
+            // If map is pinned and differs, MoveToCreature still finds the spawn
+            // on that map via FindNearestSpawnPoint's cross-map fallback.
+            (void)map;
             return MoveToCreature(player, job, entry, dist);
         }
         if (!ParseMoveXYZ(detail, x, y, z))
@@ -1057,7 +1142,7 @@ MyBotsStepOutcome MyBotsExecutor::RunStep(Player* player, MyBotsJob& job, std::s
         }
         float dist = 2.5f;
         ParseFloat(detail, "dist", dist);
-        return MoveTo(player, job, x, y, z, dist);
+        return MoveTo(player, job, x, y, z, dist, map);
     }
     if (op == "interact")
     {
@@ -1115,6 +1200,46 @@ MyBotsStepOutcome MyBotsExecutor::RunStep(Player* player, MyBotsJob& job, std::s
     }
     if (op == "revive")
         return Revive(player);
+    if (op == "use_hearthstone" || op == "hearthstone")
+    {
+        MyBotsStepOutcome o;
+        if (!player)
+        {
+            o.result = MyBotsStepResult::Failed;
+            o.detail = "no_player";
+            return o;
+        }
+        if (player->HasUnitState(UNIT_STATE_CASTING))
+        {
+            o.result = MyBotsStepResult::Running;
+            o.detail = "hearth_casting";
+            return o;
+        }
+        // Optional: only succeed when we land on a requested map (0 is valid).
+        uint32 wantMap = MAP_UNSPECIFIED;
+        if (ParseUInt(detail, "map", wantMap) && player->GetMapId() == wantMap)
+        {
+            o.result = MyBotsStepResult::Done;
+            o.detail = "already_on_map";
+            return o;
+        }
+        if (job.hearthCastAt && MyBotsNow() - job.hearthCastAt < 15)
+        {
+            o.result = MyBotsStepResult::Running;
+            o.detail = "hearth_pending";
+            return o;
+        }
+        if (!MyBotsTravel::TriggerHearthstone(player))
+        {
+            o.result = MyBotsStepResult::Failed;
+            o.detail = "hearth_unavailable";
+            return o;
+        }
+        job.hearthCastAt = MyBotsNow();
+        o.result = MyBotsStepResult::Running;
+        o.detail = "hearth_cast";
+        return o;
+    }
 
     MyBotsStepOutcome o;
     o.result = MyBotsStepResult::Failed;

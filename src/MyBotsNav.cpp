@@ -18,6 +18,7 @@
 // Playerbots.h first: TravelMgr.h relies on its AiObject/config headers.
 #include "Playerbots.h"
 #include "TravelMgr.h"
+#include "TravelNode.h"
 #endif
 
 #include <algorithm>
@@ -226,10 +227,50 @@ MyBotsTaxiResult MyBotsNav::TryTaxi(Player* player, float x, float y, float z,
     if (nodeToGoal >= selfToGoal * 0.6f)
         return MyBotsTaxiResult::Unavailable;
 
-    uint32 path = 0;
+    // Prefer a direct DBC hop; otherwise use playerbots' BFS taxi graph for
+    // multi-stop routes (Stormwind -> Menethil via Ironforge, etc.).
+    std::vector<uint32> nodes;
     uint32 cost = 0;
-    sObjectMgr->GetTaxiPath(srcNode, dstNode, path, cost);
-    if (!path)
+    {
+        uint32 path = 0;
+        uint32 hopCost = 0;
+        sObjectMgr->GetTaxiPath(srcNode, dstNode, path, hopCost);
+        if (path)
+        {
+            nodes.push_back(srcNode);
+            nodes.push_back(dstNode);
+            cost = hopCost;
+        }
+    }
+#ifdef MYBOTS_HAVE_TRAVELMGR
+    if (nodes.empty())
+    {
+        std::vector<uint32> multi = sTravelNodeMap.FindTaxiPath(srcNode, dstNode);
+        if (multi.size() >= 2)
+        {
+            uint32 total = 0;
+            bool ok = true;
+            for (size_t i = 1; i < multi.size(); ++i)
+            {
+                uint32 path = 0;
+                uint32 hopCost = 0;
+                sObjectMgr->GetTaxiPath(multi[i - 1], multi[i], path, hopCost);
+                if (!path)
+                {
+                    ok = false;
+                    break;
+                }
+                total += hopCost;
+            }
+            if (ok)
+            {
+                nodes = std::move(multi);
+                cost = total;
+            }
+        }
+    }
+#endif
+    if (nodes.size() < 2)
         return MyBotsTaxiResult::Unavailable;
 
     if (player->GetMoney() < cost)
@@ -258,10 +299,6 @@ MyBotsTaxiResult MyBotsNav::TryTaxi(Player* player, float x, float y, float z,
         return MyBotsTaxiResult::Unavailable;
     }
 
-    std::vector<uint32> nodes;
-    nodes.push_back(srcNode);
-    nodes.push_back(dstNode);
-
     player->GetMotionMaster()->Clear();
     if (!player->ActivateTaxiPathTo(nodes, flightMaster, 0))
     {
@@ -269,8 +306,9 @@ MyBotsTaxiResult MyBotsNav::TryTaxi(Player* player, float x, float y, float z,
         return MyBotsTaxiResult::Unavailable;
     }
 
-    LOG_DEBUG("module.mybots", "MyBots: taxi {} -> {} for {} (cost {})", srcNode, dstNode, player->GetName(), cost);
-    detail = "taxi_boarded";
+    LOG_DEBUG("module.mybots", "MyBots: taxi {} -> {} ({} hops) for {} (cost {})",
+        srcNode, dstNode, nodes.size() - 1, player->GetName(), cost);
+    detail = nodes.size() > 2 ? "taxi_boarded_multi" : "taxi_boarded";
     return MyBotsTaxiResult::Boarded;
 }
 

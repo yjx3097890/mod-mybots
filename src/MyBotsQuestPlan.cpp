@@ -328,10 +328,42 @@ MyBotsQuestPlan MyBotsQuestPlanner::Resolve(uint32 questId, std::string const& p
         ResolveSummonSite(plan);
     }
 
+    // Resolve the quest hub (giver preferred, else turn-in) so the director can
+    // prepend a cross-map travel_to when the character is on another continent.
+    {
+        uint32 const hubEntry = plan.giverEntry ? plan.giverEntry : plan.turninEntry;
+        uint16 mapId = 0;
+        float hx = 0.f, hy = 0.f, hz = 0.f;
+        if (hubEntry && FindCreatureSpawnNear(hubEntry, hx, hy, hz, mapId))
+        {
+            plan.hasHub = true;
+            plan.hubMap = mapId;
+            plan.hubX = hx;
+            plan.hubY = hy;
+            plan.hubZ = hz;
+        }
+        else if (plan.hasSummonSite)
+        {
+            // Binding-style quests: the summoning circle is the hub.
+            plan.hasHub = true;
+            // summon site already resolved on a known map via ResolveSummonSite —
+            // reuse turn-in/giver map lookup as a fallback.
+            uint16 m = 0;
+            float rx = 0.f, ry = 0.f, rz = 0.f;
+            uint32 const anchor = plan.turninEntry ? plan.turninEntry : plan.giverEntry;
+            if (anchor && FindCreatureSpawnNear(anchor, rx, ry, rz, m))
+                plan.hubMap = m;
+            plan.hubX = plan.summonX;
+            plan.hubY = plan.summonY;
+            plan.hubZ = plan.summonZ;
+            plan.hasHub = plan.hubMap != 0;
+        }
+    }
+
     LOG_INFO("module.mybots",
-        "MyBots quest plan {}: giver={} turnin={} objectives={} summoned={} useItem={} "
+        "MyBots quest plan {}: giver={} turnin={} hubMap={} objectives={} summoned={} useItem={} "
         "summonSite={} hasObj={} speak={}",
-        questId, plan.giverEntry, plan.turninEntry, plan.objectiveEntries.size(),
+        questId, plan.giverEntry, plan.turninEntry, plan.hubMap, plan.objectiveEntries.size(),
         plan.summonedEntries.size(), plan.useItemId, plan.hasSummonSite ? 1 : 0,
         plan.hasObjectives ? 1 : 0, plan.speakObjective ? 1 : 0);
 
