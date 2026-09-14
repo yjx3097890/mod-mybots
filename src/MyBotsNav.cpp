@@ -6,17 +6,18 @@
 #include "Creature.h"
 #include "DBCStores.h"
 #include "GridDefines.h"
+#include "Group.h"
+#include "GroupReference.h"
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
 #include "ObjectMgr.h"
 #include "PathGenerator.h"
 #include "Player.h"
+#include "Playerbots.h"
 #include "SharedDefines.h"
 
 #ifdef MYBOTS_HAVE_TRAVELMGR
-// Playerbots.h first: TravelMgr.h relies on its AiObject/config headers.
-#include "Playerbots.h"
 #include "TravelMgr.h"
 #include "TravelNode.h"
 #endif
@@ -214,6 +215,50 @@ namespace
         (void)range;
         return nullptr;
     }
+
+    // Board party selfbots standing at this flight master onto the same path.
+    uint32 BoardPartyOnTaxi(Player* leader, Creature* flightMaster,
+        std::vector<uint32> const& nodes, uint32 cost, float range)
+    {
+        if (!leader || !flightMaster || !sMyBotsConfig.NavTaxiPartyFollow())
+            return 0;
+        Group* group = leader->GetGroup();
+        if (!group)
+            return 0;
+
+        uint32 boarded = 0;
+        for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+        {
+            Player* member = ref->GetSource();
+            if (!member || member == leader || !member->IsInWorld())
+                continue;
+            if (member->GetMapId() != leader->GetMapId())
+                continue;
+            if (!GET_PLAYERBOT_AI(member))
+                continue;
+            if (!member->IsAlive() || member->IsInCombat() || member->IsInFlight())
+                continue;
+            if (member->HasUnitState(UNIT_STATE_STUNNED) || member->HasUnitState(UNIT_STATE_ROOT))
+                continue;
+            if (member->GetDistance(flightMaster) > range)
+                continue;
+            if (member->GetMoney() < cost)
+            {
+                LOG_DEBUG("module.mybots", "MyBots: party taxi skip {} (no money)", member->GetName());
+                continue;
+            }
+
+            member->GetMotionMaster()->Clear();
+            if (!member->ActivateTaxiPathTo(nodes, flightMaster, 0))
+            {
+                LOG_DEBUG("module.mybots", "MyBots: party taxi refused for {}", member->GetName());
+                continue;
+            }
+            ++boarded;
+            LOG_DEBUG("module.mybots", "MyBots: party taxi boarded {}", member->GetName());
+        }
+        return boarded;
+    }
 }
 
 bool MyBotsNav::ShouldUseTaxi(Player* player, float x, float y, float z)
@@ -335,9 +380,15 @@ MyBotsTaxiResult MyBotsNav::TryTaxi(Player* player, float x, float y, float z,
         return MyBotsTaxiResult::Unavailable;
     }
 
-    LOG_DEBUG("module.mybots", "MyBots: taxi {} -> {} ({} hops) for {} (cost {})",
-        srcNode, dstNode, nodes.size() - 1, player->GetName(), cost);
-    detail = nodes.size() > 2 ? "taxi_boarded_multi" : "taxi_boarded";
+    uint32 const party = BoardPartyOnTaxi(player, flightMaster, nodes, cost,
+        sMyBotsConfig.NavTaxiBoardDistance() + 20.f);
+
+    LOG_DEBUG("module.mybots", "MyBots: taxi {} -> {} ({} hops) for {} (cost {}, party {})",
+        srcNode, dstNode, nodes.size() - 1, player->GetName(), cost, party);
+    if (nodes.size() > 2)
+        detail = party ? "taxi_boarded_multi;party=" + std::to_string(party) : "taxi_boarded_multi";
+    else
+        detail = party ? "taxi_boarded;party=" + std::to_string(party) : "taxi_boarded";
     return MyBotsTaxiResult::Boarded;
 }
 

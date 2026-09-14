@@ -30,6 +30,7 @@ public:
     uint32 DirectorTickMs() const { return _directorTickMs; }
 
     bool NavUseTaxi() const { return _navUseTaxi; }
+    bool NavTaxiPartyFollow() const { return _navTaxiPartyFollow; }
     float NavTaxiMinDistance() const { return _navTaxiMinDistance; }
     float NavTaxiBoardDistance() const { return _navTaxiBoardDistance; }
     uint32 NavTaxiRetrySec() const { return _navTaxiRetrySec; }
@@ -70,6 +71,7 @@ private:
     uint32 _stuckTimeoutSec = 45;
     uint32 _directorTickMs = 1000;
     bool _navUseTaxi = false;
+    bool _navTaxiPartyFollow = true;
     float _navTaxiMinDistance = 600.f;
     float _navTaxiBoardDistance = 12.f;
     uint32 _navTaxiRetrySec = 120;

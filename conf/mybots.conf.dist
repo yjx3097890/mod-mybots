@@ -116,6 +116,12 @@ MyBots.Nav.TaxiMinDistance = 600
 # Default / 默认: 12
 MyBots.Nav.TaxiBoardDistance = 12
 
+# When the job character boards a flight, also board nearby party selfbots
+# at the same flight master onto the same path.
+# 作业角色登机时，同队、已在附近飞行点的 Selfbot 小号一起飞。
+# Default / 默认: 1
+MyBots.Nav.TaxiPartyFollow = 1
+
 # Seconds to wait before re-evaluating a flight path after it was unusable
 # 判定“本次不适合坐飞行点”后，多少秒再重新评估
 # Default / 默认: 120
