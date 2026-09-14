@@ -108,6 +108,9 @@ struct MyBotsJob
     // until step temporarily enables grind; cleared when the step finishes.
     bool questGrindEnabled = false;
     uint32 questHuntEntry = 0;
+    // MoveTo suppresses playerbots "loot" so chests do not pull us off the path.
+    bool lootSuppressed = false;
+    uint32 lootOpenAt = 0; // last opportunistic nearby-chest open (sec)
     // LLM high-level replan after nav stuck (runtime).
     uint32 llmReplanCount = 0;
     uint32 lastLlmReplanAt = 0;

@@ -7,8 +7,10 @@
 #include "MyBotsSelfbot.h"
 #include "MyBotsUtil.h"
 
+#include "GameObject.h"
 #include "Item.h"
 #include "Log.h"
+#include "LootObjectStack.h"
 #include "MotionMaster.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -30,6 +32,80 @@ bool TryDoAction(PlayerbotAI* ai, std::string const& name)
     if (!ai)
         return false;
     return ai->DoSpecificAction(name);
+}
+
+LootObjectStack* GetLootStack(PlayerbotAI* ai)
+{
+    if (!ai || !ai->GetAiObjectContext())
+        return nullptr;
+    if (auto* v = ai->GetAiObjectContext()->GetValue<LootObjectStack*>("available loot"))
+        return v->Get();
+    return nullptr;
+}
+
+// Playerbots "loot" strategy runs add-all-loot + move-to-loot up to ~15 yd.
+// That fights our MovePoint and looks like endless circling around chests /
+// food crates. While a job is driving travel: strip loot diversion; if a chest
+// is already in arm's reach, open it once then keep going.
+void SuppressLootDiversion(Player* player, MyBotsJob& job)
+{
+    if (!player || job.lootSuppressed)
+        return;
+    if (PlayerbotAI* ai = GET_PLAYERBOT_AI(player))
+    {
+        ai->ChangeStrategy("-loot", BOT_STATE_NON_COMBAT);
+        if (LootObjectStack* stack = GetLootStack(ai))
+            stack->Clear();
+    }
+    job.lootSuppressed = true;
+}
+
+void RestoreLootDiversion(Player* player, MyBotsJob& job)
+{
+    if (!job.lootSuppressed)
+        return;
+    if (player)
+        if (PlayerbotAI* ai = GET_PLAYERBOT_AI(player))
+            ai->ChangeStrategy("+loot", BOT_STATE_NON_COMBAT);
+    job.lootSuppressed = false;
+}
+
+void TryOpenNearbyChest(Player* player, MyBotsJob& job)
+{
+    if (!player)
+        return;
+    uint32 const now = MyBotsNow();
+    if (job.lootOpenAt && now - job.lootOpenAt < 2)
+        return;
+
+    PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
+    if (ai)
+    {
+        if (LootObjectStack* stack = GetLootStack(ai))
+        {
+            // Only loot what we can already reach — never walk sideways to it.
+            if (stack->CanLoot(INTERACTION_DISTANCE - 1.0f))
+            {
+                TryDoAction(ai, "loot");
+                TryDoAction(ai, "open loot");
+                job.lootOpenAt = now;
+                return;
+            }
+            stack->Clear();
+        }
+    }
+
+    if (GameObject* go = player->FindNearestGameObjectOfType(GAMEOBJECT_TYPE_CHEST, INTERACTION_DISTANCE))
+    {
+        if (!go->isSpawned() || go->HasFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE))
+            return;
+        if (go->HasFlag(GAMEOBJECT_FLAGS, GO_FLAG_INTERACT_COND) && !go->ActivateToQuest(player))
+            return;
+        go->Use(player);
+        job.lootOpenAt = now;
+        LOG_DEBUG("module.mybots", "MyBots: {} opens nearby chest {} while traveling",
+            player->GetName(), go->GetEntry());
+    }
 }
 
 Creature* FindNearestCreature(Player* player, uint32 entry, float range)
@@ -328,6 +404,10 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
         return o;
     }
 
+    // Do not let playerbots loot AI orbit chests / food crates while we drive.
+    SuppressLootDiversion(player, job);
+    TryOpenNearbyChest(player, job);
+
     // Cross-map: the destination lives on another map. Route there by rules
     // (hearthstone / boat / portal) instead of walking a straight line across
     // the current map toward coordinates that mean nothing here. Once we land
@@ -358,6 +438,7 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
                 return o;
             case MyBotsTravelResult::Unreachable:
                 player->StopMoving();
+                RestoreLootDiversion(player, job);
                 o.result = MyBotsStepResult::Failed;
                 o.detail = td;
                 return o;
@@ -405,6 +486,7 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
     {
         player->StopMoving();
         ResetNavState(job);
+        RestoreLootDiversion(player, job);
         o.result = MyBotsStepResult::Done;
         o.detail = "arrived";
         return o;
@@ -478,6 +560,7 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
                     {
                         player->StopMoving();
                         MyBotsTravel::Reset(job);
+                        RestoreLootDiversion(player, job);
                         o.result = MyBotsStepResult::Failed;
                         o.detail = td;
                         return o;
@@ -500,6 +583,7 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
     {
         player->StopMoving();
         ResetNavState(job);
+        RestoreLootDiversion(player, job);
         o.result = MyBotsStepResult::Done;
         o.detail = "arrived_soft";
         return o;
@@ -563,6 +647,7 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
         if (job.navAttempts > sMyBotsConfig.NavMaxStuckRetries())
         {
             player->StopMoving();
+            RestoreLootDiversion(player, job);
             o.result = MyBotsStepResult::Failed;
             o.detail = "stuck";
             return o;
@@ -869,6 +954,9 @@ void MyBotsExecutor::HaltControl(Player* player, MyBotsJob* job)
 {
     if (job)
         ClearQuestCombat(player, *job);
+
+    if (job)
+        RestoreLootDiversion(player, *job);
 
     if (!player)
         return;
