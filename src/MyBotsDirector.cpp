@@ -172,7 +172,8 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
     // Cross-map: get the character onto the quest hub continent before any
     // entry-based move_to. travel_to uses map-aware routing (hearthstone /
     // boat / portal) instead of walking a straight line off the current map.
-    if (player && plan.hasHub && plan.hubMap && plan.hubMap != player->GetMapId())
+    // hubMap 0 (Eastern Kingdoms) is a real destination — do not use `hubMap &&`.
+    if (player && plan.hasHub && plan.hubMap != player->GetMapId())
     {
         MyBotsJobStep t;
         t.op = "travel_to";
@@ -224,7 +225,10 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
                 MyBotsJobStep m;
                 m.op = "move_to";
                 std::ostringstream d;
-                d << "{\"x\":" << plan.summonX << ",\"y\":" << plan.summonY
+                // Always pin the summon-site map. Without it the bot treats the
+                // xyz as same-map and walks a straight line on the wrong continent.
+                d << "{\"map\":" << plan.summonMap
+                  << ",\"x\":" << plan.summonX << ",\"y\":" << plan.summonY
                   << ",\"z\":" << plan.summonZ << ",\"dist\":3}";
                 m.detail = d.str();
                 steps.push_back(m);
@@ -513,7 +517,10 @@ void MyBotsDirector::TickJob(MyBotsJob& job)
     // why a move is taking long instead of only seeing "running".
     if (outcome.detail != step.result
         && (outcome.detail == "detour_retry" || outcome.detail == "repath"
-            || outcome.detail.rfind("taxi_", 0) == 0))
+            || outcome.detail.rfind("taxi_", 0) == 0
+            || outcome.detail.rfind("transfer_", 0) == 0
+            || outcome.detail.rfind("hearth_", 0) == 0
+            || outcome.detail.rfind("cross_map_", 0) == 0))
         sMyBotsJobStore.AppendEvent(job.charGuid, job.id, "nav", outcome.detail);
 
     step.result = outcome.detail;

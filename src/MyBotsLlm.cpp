@@ -3,6 +3,7 @@
 #include "MyBotsDirector.h"
 #include "MyBotsExecutor.h"
 #include "MyBotsIntentQueue.h"
+#include "MyBotsJob.h"
 #include "MyBotsQuestPlan.h"
 #include "MyBotsUtil.h"
 
@@ -42,6 +43,37 @@ struct PlanRequest
 };
 std::queue<PlanRequest> gQueue;
 
+std::string TruncateEventMsg(std::string s, size_t maxLen = 3500)
+{
+    if (s.size() <= maxLen)
+        return s;
+    s.resize(maxLen);
+    s += "...(truncated)";
+    return s;
+}
+
+std::string StepsToEventJson(std::vector<MyBotsJobStep> const& steps)
+{
+    std::ostringstream ss;
+    ss << "{\"count\":" << steps.size() << ",\"steps\":[";
+    for (size_t i = 0; i < steps.size(); ++i)
+    {
+        if (i)
+            ss << ",";
+        ss << "{\"op\":\"" << MyBotsJsonEscapeCopy(steps[i].op)
+           << "\",\"detail\":" << (steps[i].detail.empty() ? "{}" : steps[i].detail) << "}";
+    }
+    ss << "]}";
+    return TruncateEventMsg(ss.str());
+}
+
+void LogLlmEvent(uint32 charGuid, std::string const& jobId, char const* kind, std::string const& message)
+{
+    if (!charGuid || jobId.empty())
+        return;
+    sMyBotsJobStore.AppendEvent(charGuid, jobId, kind, TruncateEventMsg(message));
+}
+
 char const* kSystemPrompt =
     "You are a World of Warcraft (3.3.5) quest HTN planner for mod-mybots.\n"
     "Output ONLY one JSON object: {\"steps\":[{\"op\":\"...\",\"detail\":\"{...}\"}]}\n"
@@ -51,9 +83,9 @@ char const* kSystemPrompt =
     "- First step must be ensure_selfbot with detail {}.\n"
     "- If character.map != hints.hubMap, FIRST emit travel_to with map=hints.hubMap and "
     "x/y/z from hints.hub (or use_hearthstone {\"map\":hubMap} when bind is on that map).\n"
-    "- travel_to is the ONLY op allowed to use raw x,y,z, and only together with \"map\".\n"
-    "- Same-map move_to MUST use creature \"entry\" from allowedEntries. Never invent entries.\n"
-    "- Do NOT use raw x,y,z on move_to.\n"
+    "- map id 0 (Eastern Kingdoms) is a REAL map — never omit \"map\" for travel_to.\n"
+    "- travel_to is preferred for cross-map; move_to may use map+x/y/z only for pinned sites.\n"
+    "- Same-map move_to SHOULD use creature \"entry\" from allowedEntries. Never invent entries.\n"
     "- accept_quest / turnin_quest / until must use the exact questId from the context.\n"
     "- For speak/event objectives (hints.speakObjective=true), prefer move_to entry then until "
     "with speak:1, or interact + gossip_select near that NPC.\n"
@@ -513,8 +545,13 @@ void WorkerLoop()
         }
 
         auto result = MyBotsLlm::PlanSync(req.questId, req.contextJson);
+        if (!result.rawContent.empty())
+            LogLlmEvent(req.charGuid, req.jobId, "llm_raw",
+                std::string(req.replan ? "replan;" : "plan;") + result.rawContent);
+
         if (result.ok)
         {
+            LogLlmEvent(req.charGuid, req.jobId, "llm_decision", StepsToEventJson(result.steps));
             std::ostringstream ss;
             ss << "{\"steps\":[";
             for (size_t i = 0; i < result.steps.size(); ++i)
@@ -537,6 +574,9 @@ void WorkerLoop()
         }
 
         LOG_WARN("module.mybots", "MyBots LLM plan failed for job {}: {}", req.jobId, result.error);
+        LogLlmEvent(req.charGuid, req.jobId, "llm_decision_failed",
+            std::string("error=") + (result.error.empty() ? "unknown" : result.error)
+                + (result.rawContent.empty() ? "" : ";raw=" + TruncateEventMsg(result.rawContent, 2000)));
         if (req.replan)
         {
             // Mid-job replan failure: fail the job (do not wipe with full rule rebuild).
@@ -651,10 +691,12 @@ std::string MyBotsLlm::BuildPlanContext(Player* player, uint32 questId, std::str
 
     MyBotsQuestPlan const plan = MyBotsQuestPlanner::Resolve(questId, payload);
     ss << ",\"hints\":{"
-       << "\"giverEntry\":" << plan.giverEntry
+       << "\"hasHub\":" << (plan.hasHub ? "true" : "false")
+       << ",\"giverEntry\":" << plan.giverEntry
        << ",\"turninEntry\":" << plan.turninEntry
        << ",\"hubMap\":" << plan.hubMap
        << ",\"hub\":{\"x\":" << plan.hubX << ",\"y\":" << plan.hubY << ",\"z\":" << plan.hubZ << "}"
+       << ",\"summonMap\":" << plan.summonMap
        << ",\"speakObjective\":" << (plan.speakObjective ? "true" : "false")
        << ",\"hasObjectives\":" << (plan.hasObjectives ? "true" : "false")
        << ",\"summonedObjective\":" << (plan.HasSummonedObjective() ? "true" : "false")
@@ -711,6 +753,7 @@ std::string MyBotsLlm::BuildPlanContext(Player* player, uint32 questId, std::str
            << "\"guid\":" << player->GetGUID().GetCounter()
            << ",\"name\":\"" << MyBotsJsonEscapeCopy(player->GetName()) << "\""
            << ",\"map\":" << player->GetMapId()
+           << ",\"homebindMap\":" << player->m_homebindMapId
            << ",\"zone\":" << player->GetZoneId()
            << ",\"x\":" << player->GetPositionX()
            << ",\"y\":" << player->GetPositionY()
@@ -944,12 +987,18 @@ MyBotsLlmPlanResult MyBotsLlm::ValidateAndParseSteps(uint32 questId, std::string
         {
             uint32 entry = 0;
             MyBotsExecutor::ParseUInt(step.detail, "entry", entry);
-            if (!entry)
+            uint32 map = 0;
+            bool const hasMap = MyBotsExecutor::ParseUInt(step.detail, "map", map);
+            float tx = 0.f, ty = 0.f, tz = 0.f;
+            bool const hasXYZ = MyBotsExecutor::ParseMoveXYZ(step.detail, tx, ty, tz);
+            if (!entry && !(hasMap && hasXYZ))
             {
-                result.error = "move_to_requires_entry";
+                // Prefer entry; allow map+xyz only when crossing / pinning a site
+                // (same shape as rule-built summon-site steps).
+                result.error = "move_to_requires_entry_or_map_xyz";
                 return result;
             }
-            if (!allowed.empty() && !allowed.count(entry))
+            if (entry && !allowed.empty() && !allowed.count(entry))
             {
                 result.error = "entry_not_allowed:" + std::to_string(entry);
                 return result;
@@ -957,17 +1006,17 @@ MyBotsLlmPlanResult MyBotsLlm::ValidateAndParseSteps(uint32 questId, std::string
         }
         if (step.op == "travel_to")
         {
+            // map 0 (Eastern Kingdoms) is valid — require the key, not a truthy id.
             uint32 map = 0;
-            MyBotsExecutor::ParseUInt(step.detail, "map", map);
-            float tx = 0.f, ty = 0.f, tz = 0.f;
-            bool const hasXYZ = MyBotsExecutor::ParseMoveXYZ(step.detail, tx, ty, tz);
-            uint32 entry = 0;
-            MyBotsExecutor::ParseUInt(step.detail, "entry", entry);
-            if (!map)
+            if (!MyBotsExecutor::ParseUInt(step.detail, "map", map))
             {
                 result.error = "travel_to_requires_map";
                 return result;
             }
+            float tx = 0.f, ty = 0.f, tz = 0.f;
+            bool const hasXYZ = MyBotsExecutor::ParseMoveXYZ(step.detail, tx, ty, tz);
+            uint32 entry = 0;
+            MyBotsExecutor::ParseUInt(step.detail, "entry", entry);
             if (!hasXYZ && !entry)
             {
                 result.error = "travel_to_requires_xyz_or_entry";
