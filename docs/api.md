@@ -253,16 +253,149 @@ Body：`{"questId":5929,"giverEntry":11802,"turninEntry":11802}`（与 complete_
 
 ### `GET /v1/characters/{id}/events`
 
+返回该角色最近事件（默认最多 50 条，按 `id` 倒序）。
+
 ```json
 {
   "ok": true,
   "events": [
-    {"id":1,"jobId":"job-...","kind":"job_failed","message":"stuck","createdAt":1710000000}
+    {
+      "id": 223,
+      "jobId": "job-1789371205-10",
+      "kind": "llm_plan_ok",
+      "message": "steps:10;switched_from_rules=1",
+      "createdAt": 1789371216
+    }
   ]
 }
 ```
 
-`kind` 取值：`job_created`、`job_running`、`job_succeeded`、`job_failed`、`job_cancelled`、`patrol_resume`、`patrol_loop`，以及寻路升级事件 `nav`（`message` 为 `detour_retry` / `repath` / `taxi_approach` / `taxi_boarded` / `taxi_no_money`）。走得慢时先看 `nav` 事件，能区分是在绕障碍还是在赶飞行点。
+| 字段 | 含义 |
+|---|---|
+| `id` | 事件自增 id |
+| `jobId` | 关联作业；无作业时可能为空 |
+| **`kind`** | 事件类型（见下表） |
+| **`message`** | **正文**：短状态串，或 **JSON 文本**（作为普通字符串塞在该字段里，需客户端再 `JSON.parse(message)`） |
+| `createdAt` | Unix 秒 |
+
+> `llm_raw` / `llm_decision` / `rules_plan` / 带步骤的 `llm_plan_ok` 等，**决策内容全部在 `message`**，不在别的字段。
+
+#### `kind` 一览
+
+**作业生命周期**
+
+| kind | `message` 含义 |
+|---|---|
+| `job_created` | 作业类型名 |
+| `job_running` | 作业类型名 |
+| `job_succeeded` | 如 `done` |
+| `job_failed` | 失败原因（如 `stuck`） |
+| `job_cancelled` | 取消原因 |
+| `patrol_resume` / `patrol_loop` | 巡逻相关 |
+
+**规则 / LLM 规划（`complete_quest`）**
+
+| kind | `message` 含义 |
+|---|---|
+| `rules_plan` | 规则先跑的步骤 JSON：`{"steps":[{"op":"...","detail":{...}},...]}` |
+| `llm_plan_queued` | 如 `quest:387;rules_first=1` |
+| `llm_skipped` | 未调用 LLM：`llm_disabled` / `no_api_key` / `payload_has_steps` / `db_script_or_filtered` |
+| `llm_raw` | 模型原文（可能以 `plan;` / `replan;` 前缀开头；过长截断） |
+| `llm_decision` | 解析校验后的步骤 JSON（同 `rules_plan` 形状） |
+| `llm_decision_failed` | 如 `error=...;raw=...` |
+| `llm_plan_ok` | 已采纳 LLM：`steps:N;switched_from_rules=1;plan={...}`（`plan=` 后为步骤 JSON） |
+| `llm_plan_ignored` | 校验失败仍继续规则：`keep_rules;...` 或带 `raw=` |
+| `llm_plan_fallback` / `llm_plan_failed` / `llm_replan_*` | 回退或重规划相关 |
+
+**寻路**
+
+| kind | `message` 含义 |
+|---|---|
+| `nav` | `detour_retry` / `repath` / `taxi_*` / `transfer_*` / `hearth_*` / `cross_map_*` / `canal_exit` / `canal_trapped` |
+
+#### 真实样例（LAN 库，guid 521）
+
+接口原样（旧版 `llm_plan_ok` 尚未带 `plan=` 正文时）：
+
+```json
+{
+  "ok": true,
+  "events": [
+    {
+      "id": 223,
+      "jobId": "job-1789371205-10",
+      "kind": "llm_plan_ok",
+      "message": "steps:10;switched_from_rules=1",
+      "createdAt": 1789371216
+    },
+    {
+      "id": 221,
+      "jobId": "job-1789371205-10",
+      "kind": "llm_plan_queued",
+      "message": "quest:387;rules_first=1",
+      "createdAt": 1789371205
+    }
+  ]
+}
+```
+
+新构建部署后，同一次 `complete_quest` 典型顺序与 `message` 形状如下（示意；`message` 仍是**字符串**，内嵌 JSON 会被转义）：
+
+```json
+{
+  "ok": true,
+  "events": [
+    {
+      "id": 1003,
+      "jobId": "job-...",
+      "kind": "llm_plan_ok",
+      "message": "steps:4;switched_from_rules=1;plan={\"steps\":[{\"op\":\"travel_to\",\"detail\":{\"map\":0,\"x\":-8833,\"y\":622,\"z\":94}},{\"op\":\"move_to\",\"detail\":{\"entry\":351,\"dist\":8}},{\"op\":\"turnin_quest\",\"detail\":{\"questId\":387,\"entry\":351}}]}",
+      "createdAt": 1789372000
+    },
+    {
+      "id": 1002,
+      "jobId": "job-...",
+      "kind": "llm_decision",
+      "message": "{\"count\":4,\"steps\":[{\"op\":\"ensure_selfbot\",\"detail\":{}},{\"op\":\"travel_to\",\"detail\":{\"map\":0,\"x\":-8833,\"y\":622,\"z\":94}}]}",
+      "createdAt": 1789371998
+    },
+    {
+      "id": 1001,
+      "jobId": "job-...",
+      "kind": "llm_raw",
+      "message": "plan;{\"steps\":[{\"op\":\"ensure_selfbot\",\"detail\":\"{}\"},{\"op\":\"travel_to\",\"detail\":\"{\\\"map\\\":0}\"}]}",
+      "createdAt": 1789371997
+    },
+    {
+      "id": 1000,
+      "jobId": "job-...",
+      "kind": "rules_plan",
+      "message": "{\"steps\":[{\"op\":\"ensure_selfbot\",\"detail\":{}},{\"op\":\"travel_to\",\"detail\":{\"map\":0,\"x\":-8810,\"y\":590,\"z\":94}}]}",
+      "createdAt": 1789371990
+    },
+    {
+      "id": 999,
+      "jobId": "job-...",
+      "kind": "llm_plan_queued",
+      "message": "quest:387;rules_first=1",
+      "createdAt": 1789371990
+    }
+  ]
+}
+```
+
+前端建议：
+
+```js
+for (const e of data.events) {
+  if (e.kind === "rules_plan" || e.kind === "llm_decision") {
+    const plan = JSON.parse(e.message); // { count?, steps: [...] }
+  } else if (e.kind === "llm_plan_ok" && e.message.includes(";plan=")) {
+    const json = e.message.slice(e.message.indexOf(";plan=") + 6);
+    const plan = JSON.parse(json);
+  }
+}
+```
 
 ---
 
@@ -291,7 +424,9 @@ Body：`{"questId":5929,"giverEntry":11802,"turninEntry":11802}`（与 complete_
 | op | detail 示例 | 说明 |
 |---|---|---|
 | `ensure_selfbot` | `{}` | 确保已挂 Selfbot |
-| `move_to` | `{"x":..,"y":..,"z":..}` 或 `{"entry":197}` | 移动：远距离走飞行点，卡住则绕行重试 |
+| `move_to` | `{"entry":197}` 或 `{"map":0,"x":..,"y":..,"z":..}` | 移动；跨图须带 `map`（含 map 0） |
+| `travel_to` | `{"map":0,"x":..,"y":..,"z":..}` 或带 `entry` | 跨图旅行（炉石/船门等） |
+| `use_hearthstone` | `{"map":0}`（可选） | 炉石 |
 | `interact` | `{"entry":197}` | 与 NPC 交互 |
 | `gossip_select` | `{"entry":197,"menu":0,"option":0}` | 选择 gossip |
 | `accept_quest` | `{"questId":7,"entry":197}` | 接任务 |
