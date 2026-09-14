@@ -345,6 +345,10 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
                 return;
             }
 
+            // Models often skip travel_to on cross-map quests. Inject it from
+            // the live character map vs quest hub before we replace remaining steps.
+            MyBotsDirector::EnsureHubTravel(player, questId, job->payload, parsed.steps);
+
             // Hybrid live OR explicit replan: keep finished prefix, replace remaining.
             if (replan || hybridLive)
             {
@@ -377,17 +381,22 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
                 job->error.clear();
                 sMyBotsJobStore.Save(*job);
                 {
+                    // Log remaining work from the job itself — parsed.steps was
+                    // moved-from and would show empty op/detail.
                     std::ostringstream msg;
-                    msg << "steps:" << parsed.steps.size()
+                    size_t const remain = job->steps.size() > static_cast<size_t>(from)
+                        ? job->steps.size() - static_cast<size_t>(from)
+                        : 0;
+                    msg << "steps:" << remain
                         << (hybridLive ? ";switched_from_rules=1" : "")
-                        << ";plan=";
-                    msg << "{\"steps\":[";
-                    for (size_t i = 0; i < parsed.steps.size(); ++i)
+                        << ";plan={\"steps\":[";
+                    for (size_t i = static_cast<size_t>(from); i < job->steps.size(); ++i)
                     {
-                        if (i)
+                        if (i > static_cast<size_t>(from))
                             msg << ",";
-                        msg << "{\"op\":\"" << MyBotsJsonEscapeCopy(parsed.steps[i].op)
-                            << "\",\"detail\":" << (parsed.steps[i].detail.empty() ? "{}" : parsed.steps[i].detail)
+                        auto const& st = job->steps[i];
+                        msg << "{\"op\":\"" << MyBotsJsonEscapeCopy(st.op)
+                            << "\",\"detail\":" << (st.detail.empty() ? "{}" : st.detail)
                             << "}";
                     }
                     msg << "]}";
@@ -405,6 +414,7 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
             }
 
             job->steps = std::move(parsed.steps);
+            MyBotsDirector::EnsureHubTravel(player, questId, job->payload, job->steps);
             for (size_t i = 0; i < job->steps.size(); ++i)
                 job->steps[i].ordinal = static_cast<int>(i);
             job->stepIndex = 0;

@@ -19,6 +19,10 @@ public:
         Player* player = nullptr);
     static std::vector<MyBotsJobStep> BuildCompleteQuest(uint32 questId, std::string const& payload,
         Player* player = nullptr);
+    // If the character is on another map than the quest hub, prepend travel_to
+    // unless the remaining plan already starts with travel_to / hearthstone.
+    static void EnsureHubTravel(Player* player, uint32 questId, std::string const& payload,
+        std::vector<MyBotsJobStep>& steps);
     static std::vector<MyBotsJobStep> BuildMoveTo(std::string const& payload);
     static std::vector<MyBotsJobStep> BuildPatrol(std::string const& patrolId, std::string const& payload);
 

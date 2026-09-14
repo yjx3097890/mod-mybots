@@ -170,20 +170,8 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
     bool const alreadyRewarded = st == QUEST_STATUS_REWARDED;
 
     // Cross-map: get the character onto the quest hub continent before any
-    // entry-based move_to. travel_to uses map-aware routing (hearthstone /
-    // boat / portal) instead of walking a straight line off the current map.
-    // hubMap 0 (Eastern Kingdoms) is a real destination — do not use `hubMap &&`.
-    if (player && plan.hasHub && plan.hubMap != player->GetMapId())
-    {
-        MyBotsJobStep t;
-        t.op = "travel_to";
-        std::ostringstream d;
-        d << "{\"map\":" << plan.hubMap
-          << ",\"x\":" << plan.hubX << ",\"y\":" << plan.hubY << ",\"z\":" << plan.hubZ
-          << ",\"dist\":8}";
-        t.detail = d.str();
-        steps.push_back(t);
-    }
+    // entry-based move_to.
+    EnsureHubTravel(player, questId, payload, steps);
 
     // Accept only when the character does not already have the quest. Otherwise
     // a speak-quest like 1638 would first run back to the Goldshire trainer
@@ -313,6 +301,39 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
     }
 
     return steps;
+}
+
+void MyBotsDirector::EnsureHubTravel(Player* player, uint32 questId, std::string const& payload,
+    std::vector<MyBotsJobStep>& steps)
+{
+    if (!player || !player->IsInWorld())
+        return;
+
+    MyBotsQuestPlan const plan = MyBotsQuestPlanner::Resolve(questId, payload);
+    if (!plan.hasHub || plan.hubMap == player->GetMapId())
+        return;
+
+    auto isCrossMapOp = [](std::string const& op) {
+        return op == "travel_to" || op == "use_hearthstone" || op == "hearthstone";
+    };
+
+    size_t insertAt = 0;
+    if (!steps.empty() && steps.front().op == "ensure_selfbot")
+        insertAt = 1;
+    if (insertAt < steps.size() && isCrossMapOp(steps[insertAt].op))
+        return;
+    if (insertAt == 0 && !steps.empty() && isCrossMapOp(steps.front().op))
+        return;
+
+    MyBotsJobStep t;
+    t.op = "travel_to";
+    std::ostringstream d;
+    d << "{\"map\":" << plan.hubMap
+      << ",\"x\":" << plan.hubX << ",\"y\":" << plan.hubY << ",\"z\":" << plan.hubZ
+      << ",\"dist\":8}";
+    t.detail = d.str();
+    t.status = MyBotsJobStatus::Queued;
+    steps.insert(steps.begin() + static_cast<std::ptrdiff_t>(insertAt), std::move(t));
 }
 
 std::vector<MyBotsJobStep> MyBotsDirector::BuildPatrol(std::string const& patrolId, std::string const& payload)
