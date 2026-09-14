@@ -84,6 +84,8 @@ char const* kSystemPrompt =
     "- If character.map != hints.hubMap, FIRST emit travel_to with map=hints.hubMap and "
     "x/y/z from hints.hub (or use_hearthstone {\"map\":hubMap} when bind is on that map).\n"
     "- map id 0 (Eastern Kingdoms) is a REAL map — never omit \"map\" for travel_to.\n"
+    "- NEVER skip travel_to just because you know an NPC entry — entry-only move_to "
+    "on the wrong continent walks a straight line on the current map.\n"
     "- travel_to is preferred for cross-map; move_to may use map+x/y/z only for pinned sites.\n"
     "- Same-map move_to SHOULD use creature \"entry\" from allowedEntries. Never invent entries.\n"
     "- accept_quest / turnin_quest / until must use the exact questId from the context.\n"
