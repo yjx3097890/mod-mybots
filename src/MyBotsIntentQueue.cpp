@@ -345,8 +345,21 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
                 return;
             }
 
-            // Models often skip travel_to on cross-map quests. Inject it from
-            // the live character map vs quest hub before we replace remaining steps.
+            // Models often invent travel_to toward the giver (Lakeshire) even when
+            // the quest is already held and the turn-in is elsewhere (Westfall).
+            // Drop LLM travel_to; EnsureHubTravel re-injects only for real cross-map
+            // using the status-aware hub (turn-in when incomplete/complete).
+            {
+                std::vector<MyBotsJobStep> kept;
+                kept.reserve(parsed.steps.size());
+                for (auto& s : parsed.steps)
+                {
+                    if (s.op == "travel_to")
+                        continue;
+                    kept.push_back(std::move(s));
+                }
+                parsed.steps = std::move(kept);
+            }
             MyBotsDirector::EnsureHubTravel(player, questId, job->payload, parsed.steps);
 
             // Hybrid live OR explicit replan: keep finished prefix, replace remaining.

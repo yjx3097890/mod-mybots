@@ -154,7 +154,7 @@ std::vector<MyBotsJobStep> MyBotsDirector::BuildCompleteQuest(uint32 questId, st
         }
     }
 
-    MyBotsQuestPlan const plan = MyBotsQuestPlanner::Resolve(questId, payload);
+    MyBotsQuestPlan const plan = MyBotsQuestPlanner::Resolve(questId, payload, player);
     if (!plan.error.empty())
     {
         MyBotsJobStep a;
@@ -309,7 +309,7 @@ void MyBotsDirector::EnsureHubTravel(Player* player, uint32 questId, std::string
     if (!player || !player->IsInWorld())
         return;
 
-    MyBotsQuestPlan const plan = MyBotsQuestPlanner::Resolve(questId, payload);
+    MyBotsQuestPlan const plan = MyBotsQuestPlanner::Resolve(questId, payload, player);
     if (!plan.hasHub || plan.hubMap == player->GetMapId())
         return;
 

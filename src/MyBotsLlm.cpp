@@ -83,6 +83,8 @@ char const* kSystemPrompt =
     "- First step must be ensure_selfbot with detail {}.\n"
     "- If character.map != hints.hubMap, FIRST emit travel_to with map=hints.hubMap and "
     "x/y/z from hints.hub (or use_hearthstone {\"map\":hubMap} when bind is on that map).\n"
+    "- When character.questStatus is incomplete or complete, hints.hub is the TURN-IN NPC "
+    "(hints.hubIsTurnin=true). Do NOT travel back to giverEntry.\n"
     "- map id 0 (Eastern Kingdoms) is a REAL map — never omit \"map\" for travel_to.\n"
     "- NEVER skip travel_to just because you know an NPC entry — entry-only move_to "
     "on the wrong continent walks a straight line on the current map.\n"
@@ -108,6 +110,7 @@ char const* kReplanSystemPrompt =
     "Rules:\n"
     "- If on the wrong continent (character.map != hints.hubMap), emit travel_to or "
     "use_hearthstone before any same-map move_to.\n"
+    "- If quest is already incomplete/complete, hub is the turn-in — never return to giver.\n"
     "- travel_to may use map + x/y/z from hints.hub only.\n"
     "- Use ONLY creature entries listed in allowedEntries for move_to.\n"
     "- Prefer a different approach than the failed step (other NPC, wait briefly, interact, "
@@ -691,11 +694,13 @@ std::string MyBotsLlm::BuildPlanContext(Player* player, uint32 questId, std::str
         ss << "]}";
     }
 
-    MyBotsQuestPlan const plan = MyBotsQuestPlanner::Resolve(questId, payload);
+    MyBotsQuestPlan const plan = MyBotsQuestPlanner::Resolve(questId, payload, player);
     ss << ",\"hints\":{"
        << "\"hasHub\":" << (plan.hasHub ? "true" : "false")
        << ",\"giverEntry\":" << plan.giverEntry
        << ",\"turninEntry\":" << plan.turninEntry
+       << ",\"hubEntry\":" << plan.hubEntry
+       << ",\"hubIsTurnin\":" << (plan.hubIsTurnin ? "true" : "false")
        << ",\"hubMap\":" << plan.hubMap
        << ",\"hub\":{\"x\":" << plan.hubX << ",\"y\":" << plan.hubY << ",\"z\":" << plan.hubZ << "}"
        << ",\"summonMap\":" << plan.summonMap
