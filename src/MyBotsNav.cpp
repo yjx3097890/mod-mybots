@@ -86,12 +86,38 @@ namespace
         return (type & (PATHFIND_NOPATH | PATHFIND_FARFROMPOLY_START)) != 0;
     }
 
-    // Whether we must insist on real navmesh routes. False while flying/swimming
-    // or on a map that simply has no mmaps, where straight lines are expected.
+    // Deep water column: water surface is well above the ground under (x,y).
+    // Stormwind canals report a dry-looking GetMapHeight (canal floor) that is
+    // still several metres under the water — accepting those points drops the
+    // bot into the moat.
+    bool PointIsDeepWater(Player* player, float x, float y, float z)
+    {
+        if (!player)
+            return false;
+
+        float ground = INVALID_HEIGHT;
+        float const waterOrGround = player->GetMapWaterOrGroundLevel(x, y, z + 2.f, &ground);
+        if (waterOrGround <= INVALID_HEIGHT)
+            return false;
+
+        if (ground > INVALID_HEIGHT && (waterOrGround - ground) > 1.8f)
+        {
+            // Targeting anywhere below the water surface in a deep column.
+            if (z < waterOrGround - 0.4f)
+                return true;
+        }
+        return false;
+    }
+
+    // Whether we must insist on real navmesh routes. False while flying, or on
+    // a map that simply has no mmaps. Still require mesh while swimming —
+    // otherwise Stormwind canal swimming accepts NOT_USING_PATH forever.
     bool RequireMeshRoute(Player* player)
     {
-        if (player->IsFlying() || player->isSwimming())
+        if (player->IsFlying())
             return false;
+        if (player->isSwimming())
+            return true;
 
         return (ProbeNearbyPathType(player) & PATHFIND_NOT_USING_PATH) == 0;
     }
@@ -147,6 +173,9 @@ namespace
             if (cz <= INVALID_HEIGHT)
                 cz = player->GetMapHeight(cx, cy, player->GetPositionZ());
             if (cz <= INVALID_HEIGHT)
+                continue;
+            // Do not use canal floors / lake beds as mid-waypoints on a land walk.
+            if (PointIsDeepWater(player, cx, cy, cz + 0.3f))
                 continue;
 
             PathGenerator gen(player);
@@ -332,6 +361,7 @@ bool MyBotsNav::PrepareWalkTarget(Player* player, float& x, float& y, float& z)
     // line through terrain and buildings. Accepting that is what made the
     // character walk in a dead straight line into the ground.
     bool const requireMesh = RequireMeshRoute(player);
+    bool const destIsWater = PointIsDeepWater(player, reqX, reqY, reqZ);
 
     float bestZ = INVALID_HEIGHT;
     float bestDelta = 0.f;
@@ -348,6 +378,11 @@ bool MyBotsNav::PrepareWalkTarget(Player* player, float& x, float& y, float& z)
             return;
 
         if (candidateZ < reqZ - maxDrop)
+            return;
+
+        // Land destinations must not snap onto canal / moat floors. The deep
+        // fallback (maxDrop=500) otherwise happily picks the Stormwind canal bed.
+        if (!destIsWater && PointIsDeepWater(player, reqX, reqY, candidateZ + 0.3f))
             return;
 
         PathGenerator gen(player);
@@ -482,6 +517,63 @@ void MyBotsNav::CorrectIfUnderground(Player* player)
         player->GetName(), z, ground);
 }
 
+bool MyBotsNav::IsDeepWaterAt(Player* player, float x, float y, float z)
+{
+    return PointIsDeepWater(player, x, y, z);
+}
+
+bool MyBotsNav::TryExitWaterToward(Player* player, float destX, float destY, float destZ,
+    float& outX, float& outY, float& outZ)
+{
+    if (!player || !player->IsInWorld())
+        return false;
+    if (!player->isSwimming() && !player->IsInWater())
+        return false;
+
+    // Destination itself is water (intended swim) — do not force an exit.
+    if (PointIsDeepWater(player, destX, destY, destZ))
+        return false;
+
+    float const px = player->GetPositionX();
+    float const py = player->GetPositionY();
+    float const pz = player->GetPositionZ();
+    float const angle = player->GetAngle(destX, destY);
+
+    static float const kRadii[] = { 6.f, 10.f, 16.f, 24.f, 36.f, 50.f };
+    static float const kOffsets[] = { 0.f, 0.6f, -0.6f, 1.2f, -1.2f, 1.8f, -1.8f, 2.5f, -2.5f };
+
+    for (float radius : kRadii)
+    {
+        for (float off : kOffsets)
+        {
+            float const a = angle + off;
+            float const cx = px + std::cos(a) * radius;
+            float const cy = py + std::sin(a) * radius;
+
+            // Search from above so we find the street / bank, not the canal bed.
+            float ground = player->GetMapHeight(cx, cy, pz + 25.f, true, 80.f);
+            if (ground <= INVALID_HEIGHT)
+                ground = player->GetMapHeight(cx, cy, destZ + 10.f, true, 80.f);
+            if (ground <= INVALID_HEIGHT)
+                continue;
+            if (PointIsDeepWater(player, cx, cy, ground + 0.5f))
+                continue;
+            // Bank should be near street level, not deep below the swimmer.
+            if (ground < pz - 6.f && ground < destZ - 6.f)
+                continue;
+
+            outX = cx;
+            outY = cy;
+            outZ = ground + 0.2f;
+            LOG_DEBUG("module.mybots",
+                "MyBots: {} exits water toward ({:.1f},{:.1f},{:.1f})",
+                player->GetName(), outX, outY, outZ);
+            return true;
+        }
+    }
+    return false;
+}
+
 bool MyBotsNav::ComputeDetour(Player* player, float destX, float destY, float destZ, uint32 attempt,
     float& outX, float& outY, float& outZ)
 {
@@ -494,6 +586,7 @@ bool MyBotsNav::ComputeDetour(Player* player, float destX, float destY, float de
 
     float const baseAngle = player->GetAngle(destX, destY);
     float const radius = sMyBotsConfig.NavDetourRadius() * float(1 + attempt / kAngleCount);
+    bool const destIsWater = PointIsDeepWater(player, destX, destY, destZ);
 
     for (uint32 i = 0; i < kAngleCount; ++i)
     {
@@ -508,6 +601,9 @@ bool MyBotsNav::ComputeDetour(Player* player, float destX, float destY, float de
         if (std::fabs(cz - player->GetPositionZ()) > 12.f)
             continue;
 
+        if (!destIsWater && PointIsDeepWater(player, cx, cy, cz))
+            continue;
+
         if (IsBadPoint(player, cx, cy, cz))
             continue;
 
@@ -520,6 +616,7 @@ bool MyBotsNav::ComputeDetour(Player* player, float destX, float destY, float de
         return true;
     }
 
+    (void)destZ;
     return false;
 }
 

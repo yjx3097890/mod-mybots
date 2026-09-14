@@ -201,14 +201,20 @@ void ResolveSummonSite(MyBotsQuestPlan& plan)
     if (anchor && FindCreatureSpawnNear(anchor, refX, refY, refZ, mapId))
     {
         if (FindSummonSiteNear(focusId, mapId, refX, refY, plan.summonX, plan.summonY, plan.summonZ))
+        {
             plan.hasSummonSite = true;
+            plan.summonMap = mapId;
+        }
     }
 
     // Fallback: any summoning circle on the same map as the character's hub NPC.
     if (!plan.hasSummonSite && mapId)
     {
         if (FindSummonSiteNear(0, mapId, refX, refY, plan.summonX, plan.summonY, plan.summonZ))
+        {
             plan.hasSummonSite = true;
+            plan.summonMap = mapId;
+        }
     }
 }
 } // namespace
@@ -330,6 +336,7 @@ MyBotsQuestPlan MyBotsQuestPlanner::Resolve(uint32 questId, std::string const& p
 
     // Resolve the quest hub (giver preferred, else turn-in) so the director can
     // prepend a cross-map travel_to when the character is on another continent.
+    // Eastern Kingdoms is map 0 — hasHub must not be cleared just because hubMap==0.
     {
         uint32 const hubEntry = plan.giverEntry ? plan.giverEntry : plan.turninEntry;
         uint16 mapId = 0;
@@ -344,19 +351,11 @@ MyBotsQuestPlan MyBotsQuestPlanner::Resolve(uint32 questId, std::string const& p
         }
         else if (plan.hasSummonSite)
         {
-            // Binding-style quests: the summoning circle is the hub.
             plan.hasHub = true;
-            // summon site already resolved on a known map via ResolveSummonSite —
-            // reuse turn-in/giver map lookup as a fallback.
-            uint16 m = 0;
-            float rx = 0.f, ry = 0.f, rz = 0.f;
-            uint32 const anchor = plan.turninEntry ? plan.turninEntry : plan.giverEntry;
-            if (anchor && FindCreatureSpawnNear(anchor, rx, ry, rz, m))
-                plan.hubMap = m;
+            plan.hubMap = plan.summonMap;
             plan.hubX = plan.summonX;
             plan.hubY = plan.summonY;
             plan.hubZ = plan.summonZ;
-            plan.hasHub = plan.hubMap != 0;
         }
     }
 

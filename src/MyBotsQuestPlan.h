@@ -24,11 +24,15 @@ struct MyBotsQuestPlan
     float summonZ = 0.f;
     // Hub location of the quest (giver spawn preferred, else turn-in). Used to
     // prepend a cross-map travel_to when the character is on another continent.
+    // hubMap 0 (Eastern Kingdoms) is valid — never treat 0 as "missing".
     bool hasHub = false;
     uint32 hubMap = 0;
     float hubX = 0.f;
     float hubY = 0.f;
     float hubZ = 0.f;
+    // Summoning-circle map (usually same as hub). Raw xyz move_to must carry this
+    // or the bot walks those coordinates on the wrong continent.
+    uint32 summonMap = 0;
     // False for speak/deliver quests that only need accept → turn-in.
     bool hasObjectives = false;
     // True when the objective is gossip/event credit (do not grind-attack NPCs).

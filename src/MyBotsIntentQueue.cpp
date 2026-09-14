@@ -217,6 +217,27 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
                 }
                 auto job = sMyBotsJobStore.Create(guid, accountId, intent.jobType, intent.payload,
                     std::move(steps));
+                // Snapshot the rule plan so /events shows whether travel_to was prepended.
+                {
+                    std::ostringstream msg;
+                    msg << "{\"steps\":[";
+                    for (size_t i = 0; i < job->steps.size(); ++i)
+                    {
+                        if (i)
+                            msg << ",";
+                        msg << "{\"op\":\"" << MyBotsJsonEscapeCopy(job->steps[i].op)
+                            << "\",\"detail\":" << (job->steps[i].detail.empty() ? "{}" : job->steps[i].detail)
+                            << "}";
+                    }
+                    msg << "]}";
+                    std::string m = msg.str();
+                    if (m.size() > 3500)
+                    {
+                        m.resize(3500);
+                        m += "...(truncated)";
+                    }
+                    sMyBotsJobStore.AppendEvent(guid, job->id, "rules_plan", m);
+                }
                 if (MyBotsLlm::ShouldPlanCompleteQuest(questId, intent.payload))
                 {
                     std::string context = MyBotsLlm::BuildPlanContext(player, questId, intent.payload);
@@ -228,6 +249,17 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
                         + MyBotsDirector::JobToJson(*job)
                         + ",\"note\":\"rules_running_llm_pending\"}");
                     return;
+                }
+                // Make it visible in /events when LLM did not run (disabled, no key, custom steps).
+                {
+                    std::string why = "skipped";
+                    if (!MyBotsLlm::IsReady())
+                        why = sMyBotsConfig.LlmEnable() ? "no_api_key" : "llm_disabled";
+                    else if (intent.payload.find("\"steps\"") != std::string::npos)
+                        why = "payload_has_steps";
+                    else
+                        why = "db_script_or_filtered";
+                    sMyBotsJobStore.AppendEvent(guid, job->id, "llm_skipped", why);
                 }
                 finish(202, "{\"ok\":true,\"code\":\"accepted\",\"jobId\":\"" + MyBotsJsonEscapeCopy(job->id)
                     + "\",\"job\":" + MyBotsDirector::JobToJson(*job) + "}");
@@ -277,7 +309,12 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
                 if (hybridLive && !replan)
                 {
                     sMyBotsJobStore.AppendEvent(job->charGuid, job->id, "llm_plan_ignored",
-                        parsed.error.empty() ? "parse_failed_keep_rules" : parsed.error);
+                        std::string("keep_rules;")
+                            + (parsed.error.empty() ? "parse_failed" : parsed.error)
+                            + (parsed.rawContent.empty()
+                                ? ""
+                                : ";raw=" + parsed.rawContent.substr(0,
+                                    std::min<size_t>(parsed.rawContent.size(), 1500))));
                     finish(200, "{\"ok\":true,\"code\":\"keep_rules\"}");
                     return;
                 }
@@ -339,10 +376,30 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
                     job->status = MyBotsJobStatus::Queued;
                 job->error.clear();
                 sMyBotsJobStore.Save(*job);
-                sMyBotsJobStore.AppendEvent(job->charGuid, job->id,
-                    replan ? "llm_replan_ok" : "llm_plan_ok",
-                    "steps:" + std::to_string(parsed.steps.size())
-                        + (hybridLive ? ";switched_from_rules=1" : ""));
+                {
+                    std::ostringstream msg;
+                    msg << "steps:" << parsed.steps.size()
+                        << (hybridLive ? ";switched_from_rules=1" : "")
+                        << ";plan=";
+                    msg << "{\"steps\":[";
+                    for (size_t i = 0; i < parsed.steps.size(); ++i)
+                    {
+                        if (i)
+                            msg << ",";
+                        msg << "{\"op\":\"" << MyBotsJsonEscapeCopy(parsed.steps[i].op)
+                            << "\",\"detail\":" << (parsed.steps[i].detail.empty() ? "{}" : parsed.steps[i].detail)
+                            << "}";
+                    }
+                    msg << "]}";
+                    std::string m = msg.str();
+                    if (m.size() > 3500)
+                    {
+                        m.resize(3500);
+                        m += "...(truncated)";
+                    }
+                    sMyBotsJobStore.AppendEvent(job->charGuid, job->id,
+                        replan ? "llm_replan_ok" : "llm_plan_ok", m);
+                }
                 finish(200, "{\"ok\":true,\"code\":\"" + std::string(replan ? "replanned" : "switched") + "\"}");
                 return;
             }
@@ -354,8 +411,26 @@ void MyBotsIntentQueue::Execute(MyBotsIntent& intent)
             job->status = MyBotsJobStatus::Queued;
             job->error.clear();
             sMyBotsJobStore.Save(*job);
-            sMyBotsJobStore.AppendEvent(job->charGuid, job->id, "llm_plan_ok",
-                "steps:" + std::to_string(job->steps.size()));
+            {
+                std::ostringstream msg;
+                msg << "steps:" << job->steps.size() << ";plan={\"steps\":[";
+                for (size_t i = 0; i < job->steps.size(); ++i)
+                {
+                    if (i)
+                        msg << ",";
+                    msg << "{\"op\":\"" << MyBotsJsonEscapeCopy(job->steps[i].op)
+                        << "\",\"detail\":" << (job->steps[i].detail.empty() ? "{}" : job->steps[i].detail)
+                        << "}";
+                }
+                msg << "]}";
+                std::string m = msg.str();
+                if (m.size() > 3500)
+                {
+                    m.resize(3500);
+                    m += "...(truncated)";
+                }
+                sMyBotsJobStore.AppendEvent(job->charGuid, job->id, "llm_plan_ok", m);
+            }
             finish(200, "{\"ok\":true}");
             return;
         }
