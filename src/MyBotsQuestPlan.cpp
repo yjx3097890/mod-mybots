@@ -10,6 +10,7 @@
 #include "ItemTemplate.h"
 #include "Log.h"
 #include "ObjectMgr.h"
+#include "Player.h"
 #include "QueryResult.h"
 #include "QuestDef.h"
 #include "SharedDefines.h"
@@ -219,7 +220,7 @@ void ResolveSummonSite(MyBotsQuestPlan& plan)
 }
 } // namespace
 
-MyBotsQuestPlan MyBotsQuestPlanner::Resolve(uint32 questId, std::string const& payload)
+MyBotsQuestPlan MyBotsQuestPlanner::Resolve(uint32 questId, std::string const& payload, Player* player)
 {
     MyBotsQuestPlan plan;
     plan.questId = questId;
@@ -334,11 +335,23 @@ MyBotsQuestPlan MyBotsQuestPlanner::Resolve(uint32 questId, std::string const& p
         ResolveSummonSite(plan);
     }
 
-    // Resolve the quest hub (giver preferred, else turn-in) so the director can
-    // prepend a cross-map travel_to when the character is on another continent.
-    // Eastern Kingdoms is map 0 — hasHub must not be cleared just because hubMap==0.
+    // Resolve the quest hub. If the character already has the quest, prefer the
+    // turn-in NPC (Defias stage 2: fly to Gryan in Westfall, not back to Wiley
+    // in Lakeshire). Otherwise prefer the giver for accept.
     {
-        uint32 const hubEntry = plan.giverEntry ? plan.giverEntry : plan.turninEntry;
+        bool preferTurnin = false;
+        if (player)
+        {
+            QuestStatus const st = player->GetQuestStatus(questId);
+            preferTurnin = st == QUEST_STATUS_INCOMPLETE || st == QUEST_STATUS_COMPLETE;
+        }
+
+        uint32 hubEntry = 0;
+        if (preferTurnin)
+            hubEntry = plan.turninEntry ? plan.turninEntry : plan.giverEntry;
+        else
+            hubEntry = plan.giverEntry ? plan.giverEntry : plan.turninEntry;
+
         uint16 mapId = 0;
         float hx = 0.f, hy = 0.f, hz = 0.f;
         if (hubEntry && FindCreatureSpawnNear(hubEntry, hx, hy, hz, mapId))
@@ -348,6 +361,8 @@ MyBotsQuestPlan MyBotsQuestPlanner::Resolve(uint32 questId, std::string const& p
             plan.hubX = hx;
             plan.hubY = hy;
             plan.hubZ = hz;
+            plan.hubEntry = hubEntry;
+            plan.hubIsTurnin = preferTurnin && plan.turninEntry && hubEntry == plan.turninEntry;
         }
         else if (plan.hasSummonSite)
         {
@@ -356,13 +371,16 @@ MyBotsQuestPlan MyBotsQuestPlanner::Resolve(uint32 questId, std::string const& p
             plan.hubX = plan.summonX;
             plan.hubY = plan.summonY;
             plan.hubZ = plan.summonZ;
+            plan.hubEntry = plan.turninEntry ? plan.turninEntry : plan.giverEntry;
+            plan.hubIsTurnin = preferTurnin;
         }
     }
 
     LOG_INFO("module.mybots",
-        "MyBots quest plan {}: giver={} turnin={} hubMap={} objectives={} summoned={} useItem={} "
-        "summonSite={} hasObj={} speak={}",
-        questId, plan.giverEntry, plan.turninEntry, plan.hubMap, plan.objectiveEntries.size(),
+        "MyBots quest plan {}: giver={} turnin={} hubEntry={} hubMap={} hubTurnin={} objectives={} "
+        "summoned={} useItem={} summonSite={} hasObj={} speak={}",
+        questId, plan.giverEntry, plan.turninEntry, plan.hubEntry, plan.hubMap,
+        plan.hubIsTurnin ? 1 : 0, plan.objectiveEntries.size(),
         plan.summonedEntries.size(), plan.useItemId, plan.hasSummonSite ? 1 : 0,
         plan.hasObjectives ? 1 : 0, plan.speakObjective ? 1 : 0);
 
