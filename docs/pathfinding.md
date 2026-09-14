@@ -40,12 +40,12 @@ MyBotsTravel   MyBotsNav + IssueMove
      │              ▼
      │         磁盘上的 mmaps（导航网格数据）
      ▼
-playerbots TravelMgr（船/门表、坏格子、多跳飞行图）
+playerbots_travelnode（船/门）+ TravelMgr（坏格子、多跳飞行图）
 ```
 
 - **本模块**：决定「去哪、用什么交通方式、假路径拒不执行」。
 - **引擎**：真正算折线、驱动角色移动。
-- **playerbots**：提供跨图交通知识（`TravelMgr`），本模块只读复用，不重写战斗。
+- **playerbots**：坏格子 / 多跳飞行只读 `TravelMgr`。船和传送门改从 `playerbots_travelnode` 自己装，因为现版 playerbots 启动时不再 `loadMapTransfers`。
 
 ---
 
@@ -127,7 +127,7 @@ playerbots TravelMgr（船/门表、坏格子、多跳飞行图）
 | **hearthstone / homebind** | 炉石；角色绑定点所在地图。绑定图=目标图时可炉石过去。 |
 | **TravelMgr** | playerbots 旅行管理器：任务点、坏 mmap、跨图边等。 |
 | **mapTransfer** | 一张「从 A 图某点 → B 图某点」的交通边（船、飞艇、区域触发传送门等）。 |
-| **mapTransfersMap** | 按 `{出发图, 到达图}` 索引的 transfer 列表。 |
+| **continent transfers** | 启动时从 `playerbots_travelnode` + `_link` 只读 **type 2/3（门/船）**、地图 `0/1/530/571` 的边；按阵营过滤飞艇/联盟船。不灌 walk path。 |
 | **transfer_approach** | 正在 **本图** 用 navmesh 走到码头/门口。 |
 | **transfer_waiting** | 已到点，等船/触发器把人换到另一张图。 |
 | **cross_map_unreachable** | 炉石和 transfer 都用不上 → **安全失败**，原地停，不乱走。 |
@@ -143,8 +143,8 @@ playerbots TravelMgr（船/门表、坏格子、多跳飞行图）
 | `unreachable` / `stuck` | 同图走不通或卡死超限 |
 | `taxi_approach` / `taxi_boarded` / `taxi_boarded_multi` | 走向飞行点 / 已登机 / 多跳登机 |
 | `hearth_cast` / `hearth_pending` | 正在炉石 / 等炉石完成 |
-| `transfer_approach` / `transfer_waiting` | 走向交通点 / 等换图 |
-| `cross_map_unreachable` | 跨图无可用规则 |
+| `transfer_approach` / `transfer_approach;via=` / `transfer_waiting` | 走向交通点（via 为船/门名） / 等换图 |
+| `cross_map_unreachable;from=;to=;hearth=;transfers=` | 跨图无可用规则（当前图/目标图/炉石图/本阵营可用边数） |
 | `cross_map_combat` | 跨图时先在打架，暂缓 |
 
 ---
@@ -191,7 +191,7 @@ MovePoint(generatePath=true)
 2. **MoveTo** 发现 `当前 map ≠ B` → 只走 **AdvanceCrossMap**，不对本图发「朝 B 的 xyz 直走」。
 3. 规则顺序：
    1. **炉石**：`homebind` 在 B → 施放炉石，等换图。
-   2. **mapTransfer**：在 TravelMgr 里找 A→B 最合适的边 → 设 `travelLeg*` 为本图码头/门口 → 用 **同图 navmesh** 走到那里 → `transfer_waiting` 等引擎换图。
+   2. **船/门**：在已加载的 continent transfers 里找 A→B 最合适的边（按阵营过滤）→ 设 `travelLeg*` 为本图码头/门口 → 用 **同图 navmesh** 走到那里 → `transfer_waiting` 等引擎换图。
    3. 否则 **`cross_map_unreachable`** 失败。
 4. 一旦 `GetMapId() == B` → 视为跨图到达，再进入第 4 节同图走路去最终 xyz。
 
@@ -200,7 +200,7 @@ MovePoint(generatePath=true)
         │
         ├─ 炉石绑定在 B？ ──是──► 炉石 ──► 到 B 后再 navmesh
         │
-        ├─ 有 A→B 的船/门？ ─是─► 本图走到登船点 ──► 等换图 ──► 到 B 后再 navmesh
+        ├─ 有 A→B 的船/门（travelnode）？ ─是─► 本图走到登船点 ──► 等换图 ──► 到 B 后再 navmesh
         │
         └─ 都没有 ──► 失败（原地），禁止在 A 上朝 B 的坐标冲
 ```
@@ -215,12 +215,12 @@ MovePoint(generatePath=true)
 |---|---|
 | 同图 PathGenerator / MovePoint | AzerothCore 引擎（playerbots 也用同类手段） |
 | 坏网格格子 `isBadMmap` | 只读 `TravelMgr` |
-| 船/门 `mapTransfer` | 只读 `TravelMgr` |
+| 船/门 | 只读 `playerbots_travelnode`（节点+跨图 link）；现版 TravelMgr 启动时表是空的 |
 | 多跳飞行 `FindTaxiPath` | 只读 `TravelNodeMap` |
 | 炉石动作 | 优先调用 playerbots 的 `hearthstone` action |
 | 战斗、职业循环 | 仍由 playerbots；作业期间会关掉部分 RPG/travel 自主策略，避免抢控制 |
 
-编译开关 **`MYBOTS_HAVE_TRAVELMGR`**：检测到兼容的 TravelMgr 头文件后，才启用上述只读复用。
+编译开关 **`MYBOTS_HAVE_TRAVELMGR`**：坏格子 / 多跳飞行仍只在检测到兼容 TravelMgr 头文件后启用。船和传送门走 `playerbots_travelnode` SQL，不依赖该开关。
 
 ---
 
@@ -253,7 +253,7 @@ MovePoint(generatePath=true)
 | taxi 最小距离 | 近距离不坐鸟 |
 | 重算路径间隔 | 避免每 tick 重寻路导致抽搐 |
 | 卡住重试次数 / 绕路 | stuck 与 detour 策略 |
-| 是否使用 TravelMgr | 坏格子、部分旅行数据 |
+| 是否使用 TravelMgr | 坏格子（船/门不走这个开关，启动必载 travelnode 跨图边） |
 
 ---
 

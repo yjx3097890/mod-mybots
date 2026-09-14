@@ -161,8 +161,11 @@ MyBots.Nav.BadPointTtlSec = 900
 # Read Playerbots TravelMgr's bad-navmesh grids when validating detour points.
 # Read-only: this module never writes into TravelMgr. Needs a mod-playerbots
 # that exposes isBadMmap, otherwise the integration is compiled out.
+# Continent boats/portals are loaded separately from playerbots_travelnode
+# (+ _link, type portal/transport only) at startup — not from TravelMgr.
 # 校验绕行点时，只读复用 Playerbots TravelMgr 已知的“导航网格坏格”。
 # 本模块不会写入 TravelMgr；若 mod-playerbots 没有该接口则编译期自动关闭。
+# 跨大陆船/门从 playerbots_travelnode 单独加载（只要节点和跨图边，不要 walk path）。
 # Default / 默认: 1
 MyBots.Nav.UseTravelMgr = 1
 

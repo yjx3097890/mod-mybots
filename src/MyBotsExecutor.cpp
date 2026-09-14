@@ -338,9 +338,9 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
             case MyBotsTravelResult::Advancing:
                 // Walk to the transfer boarding point on the CURRENT map using
                 // normal navmesh pathing — that is the whole point of the leg.
-                if (job.travelLegSet && (td == "transfer_approach" || td.rfind("transfer_", 0) == 0))
+                if (job.travelLegSet && td.rfind("transfer_", 0) == 0)
                 {
-                    if (td == "transfer_approach")
+                    if (td.rfind("transfer_approach", 0) == 0)
                         IssueMove(player, job, job.travelLegX, job.travelLegY, job.travelLegZ, false);
                 }
                 o.result = MyBotsStepResult::Running;

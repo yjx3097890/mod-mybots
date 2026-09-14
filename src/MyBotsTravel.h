@@ -22,15 +22,19 @@ class MyBotsTravel
 {
 public:
     // Route the player toward (x,y,z) on destMap when they are on a different
-    // map. Rule order (ported from playerbots' TravelMgr decisions):
+    // map. Rule order:
     //   1. Hearthstone home when the bind point is on the destination map.
-    //   2. Walk to the nearest TravelMgr mapTransfer (boat / zeppelin / portal)
-    //      boarding point on the current map, then wait for the transfer.
+    //   2. Walk to the nearest continent boat / zeppelin / portal boarding
+    //      point on the current map, then wait for the transfer.
     //   3. Fail cleanly — never walk a straight line across the wrong map.
     // When a transfer approach leg is active, job.travelLeg* is set and the
     // executor issues same-map navmesh movement toward that point.
     static MyBotsTravelResult AdvanceCrossMap(Player* player, MyBotsJob& job,
         uint32 destMap, float x, float y, float z, std::string& detail);
+
+    // Load continent boat/portal edges from playerbots_travelnode(+_link)
+    // without pulling the 1.4M walk-path rows or writing TravelMgr. Idempotent.
+    static void EnsureTransfersLoaded();
 
     // Clear cross-map bookkeeping once a leg finishes or the job resets.
     static void Reset(MyBotsJob& job);

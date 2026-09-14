@@ -3,6 +3,7 @@
 #include "MyBotsIntentQueue.h"
 #include "MyBotsJob.h"
 #include "MyBotsLlm.h"
+#include "MyBotsTravel.h"
 
 #include "Log.h"
 #include "ScriptMgr.h"
@@ -33,6 +34,7 @@ public:
         }
 
         LOG_INFO("module.mybots", "mod-mybots started (Selfbot + Job director)");
+        MyBotsTravel::EnsureTransfersLoaded();
         MyBotsHttpServer::Start();
         MyBotsLlm::Start();
     }
