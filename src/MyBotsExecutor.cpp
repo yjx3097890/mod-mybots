@@ -160,21 +160,21 @@ bool IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool f
     if (player->IsInFlight() || player->HasUnitFlag(UNIT_FLAG_TAXI_FLIGHT))
         return true;
 
-    // If we are already walking toward the same logical destination, do not
-    // re-run PathGenerator / Clear+MovePoint. That restart is what looks like
-    // a sudden speed boost then a rubber-band.
+    bool const inWater = player->isSwimming() || player->IsInWater();
     bool const sameRequest = std::fabs(job.moveReqX - x) < 2.f
         && std::fabs(job.moveReqY - y) < 2.f
         && std::fabs(job.moveReqZ - z) < 3.f;
     bool const driving = player->GetMotionMaster()->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE;
-    if (!force && sameRequest && driving && job.moveIssuedAt
+    // While in canals we must keep re-evaluating exit banks — skipping repath
+    // leaves the bot swimming the same useless segment forever.
+    if (!force && !inWater && sameRequest && driving && job.moveIssuedAt
         && now - job.moveIssuedAt < sMyBotsConfig.NavRepathSec())
         return true;
 
     // Already close to the last issued mesh target for this request — do not
     // retarget to a slightly different PrepareWalkTarget (common near NPCs and
     // the cause of endless circling).
-    if (!force && sameRequest && driving && job.moveIssuedAt)
+    if (!force && !inWater && sameRequest && driving && job.moveIssuedAt)
     {
         float const toIssued = Dist2dApprox(player->GetPositionX(), player->GetPositionY(),
             job.moveTargetX, job.moveTargetY);
@@ -195,6 +195,21 @@ bool IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool f
     job.moveReqY = y;
     job.moveReqZ = z;
 
+    // Stormwind canals: once swimming, pathing used to accept straight-line
+    // water routes forever. Climb to a dry bank toward the land destination first.
+    bool exitedWater = false;
+    if (inWater)
+    {
+        float ex = 0.f, ey = 0.f, ez = 0.f;
+        if (MyBotsNav::TryExitWaterToward(player, x, y, z, ex, ey, ez))
+        {
+            x = ex;
+            y = ey;
+            z = ez;
+            exitedWater = true;
+        }
+    }
+
     // Resolve walkable XYZ via mmap (Playerbots-style). Do NOT use Map::GetHeight
     // from the sky — that is what snapped us onto cave floors.
     if (!MyBotsNav::PrepareWalkTarget(player, x, y, z))
@@ -207,7 +222,7 @@ bool IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool f
     bool const sameTarget = std::fabs(job.moveTargetX - x) < 1.5f
         && std::fabs(job.moveTargetY - y) < 1.5f
         && std::fabs(job.moveTargetZ - z) < 2.f;
-    if (!force && sameTarget && driving && job.moveIssuedAt
+    if (!force && !exitedWater && sameTarget && driving && job.moveIssuedAt
         && now - job.moveIssuedAt < sMyBotsConfig.NavRepathSec())
         return true;
 
@@ -506,18 +521,20 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
         }
     }
 
+    bool const wasInWater = player->isSwimming() || player->IsInWater();
+    bool const landDest = !MyBotsNav::IsDeepWaterAt(player, x, y, z);
     if (!IssueMove(player, job, x, y, z, false))
     {
         // No navmesh route: stay put and let the stuck timer escalate to a
         // detour. Issuing a move anyway is what produced straight lines through
         // walls and floors.
         o.result = MyBotsStepResult::Running;
-        o.detail = "unreachable";
+        o.detail = wasInWater && landDest ? "canal_trapped" : "unreachable";
         return o;
     }
 
     o.result = MyBotsStepResult::Running;
-    o.detail = "moving";
+    o.detail = wasInWater && landDest ? "canal_exit" : "moving";
     return o;
 }
 

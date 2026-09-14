@@ -520,7 +520,9 @@ void MyBotsDirector::TickJob(MyBotsJob& job)
             || outcome.detail.rfind("taxi_", 0) == 0
             || outcome.detail.rfind("transfer_", 0) == 0
             || outcome.detail.rfind("hearth_", 0) == 0
-            || outcome.detail.rfind("cross_map_", 0) == 0))
+            || outcome.detail.rfind("cross_map_", 0) == 0
+            || outcome.detail == "canal_exit"
+            || outcome.detail == "canal_trapped"))
         sMyBotsJobStore.AppendEvent(job.charGuid, job.id, "nav", outcome.detail);
 
     step.result = outcome.detail;

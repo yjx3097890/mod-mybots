@@ -35,6 +35,15 @@ public:
     // them back onto the floor under their feet before issuing another move.
     static void CorrectIfUnderground(Player* player);
 
+    // True when (x,y,z) sits in a deep water column (Stormwind canals, etc.).
+    static bool IsDeepWaterAt(Player* player, float x, float y, float z);
+
+    // When swimming but the logical destination is on land, pick a nearby dry
+    // bank toward the goal so we climb out instead of swimming the canals.
+    // Returns true and fills outX/Y/Z when an exit point was found.
+    static bool TryExitWaterToward(Player* player, float destX, float destY, float destZ,
+        float& outX, float& outY, float& outZ);
+
     // Side offset used when the straight line keeps failing.
     static bool ComputeDetour(Player* player, float destX, float destY, float destZ, uint32 attempt,
         float& outX, float& outY, float& outZ);
