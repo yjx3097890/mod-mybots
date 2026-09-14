@@ -156,8 +156,11 @@ bool IssueMove(Player* player, MyBotsJob& job, float x, float y, float z, bool f
     uint32 const now = MyBotsNow();
 
     // Never interrupt an active taxi spline — Clear() here is what caused the
-    // Goldshire board→drop→board loop.
+    // Goldshire board→drop→board loop. Same for boats/zeppelins: MovePoint while
+    // aboard walks the character back through the hull toward the old dock.
     if (player->IsInFlight() || player->HasUnitFlag(UNIT_FLAG_TAXI_FLIGHT))
+        return true;
+    if (player->GetTransport() || player->HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT))
         return true;
 
     bool const inWater = player->isSwimming() || player->IsInWater();
@@ -336,12 +339,19 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
         switch (MyBotsTravel::AdvanceCrossMap(player, job, targetMap, x, y, z, td))
         {
             case MyBotsTravelResult::Advancing:
-                // Walk to the transfer boarding point on the CURRENT map using
-                // normal navmesh pathing — that is the whole point of the leg.
-                if (job.travelLegSet && td.rfind("transfer_", 0) == 0)
+                // Walk to the transfer boarding / disembark pier on the CURRENT
+                // map. Never IssueMove while waiting on the dock or aboard —
+                // that walks the bot back through the hull as the boat moves.
+                if (td.rfind("transfer_approach", 0) == 0
+                    || td.rfind("transfer_disembark", 0) == 0)
                 {
-                    if (td.rfind("transfer_approach", 0) == 0)
+                    if (job.travelLegSet)
                         IssueMove(player, job, job.travelLegX, job.travelLegY, job.travelLegZ, false);
+                }
+                else if (td.rfind("transfer_waiting", 0) == 0
+                    || td.rfind("transfer_aboard", 0) == 0)
+                {
+                    player->StopMoving();
                 }
                 o.result = MyBotsStepResult::Running;
                 o.detail = td;
@@ -398,6 +408,88 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
         o.result = MyBotsStepResult::Done;
         o.detail = "arrived";
         return o;
+    }
+
+    // Same-map long hops: taxi first (before stuck/detour/walk). Falling through
+    // to IssueMove here is what sent bots swimming/flying across Darkshore→Darnassus.
+    if (now >= job.taxiRetryAt && MyBotsNav::ShouldUseTaxi(player, x, y, z))
+    {
+        float bx = 0.f, by = 0.f, bz = 0.f;
+        std::string taxiDetail;
+        switch (MyBotsNav::TryTaxi(player, x, y, z, bx, by, bz, taxiDetail))
+        {
+            case MyBotsTaxiResult::Boarded:
+                job.taxiInProgress = true;
+                job.taxiSawFlight = false;
+                job.taxiBoardedAt = now;
+                job.moveIssuedAt = 0;
+                job.stuckSince = 0;
+                o.result = MyBotsStepResult::Running;
+                o.detail = taxiDetail;
+                return o;
+            case MyBotsTaxiResult::Approaching:
+                IssueMove(player, job, bx, by, bz, false);
+                o.result = MyBotsStepResult::Running;
+                o.detail = taxiDetail;
+                return o;
+            case MyBotsTaxiResult::Unavailable:
+                // Only cool down on hard failures (no path / money / refused).
+                // taxi_no_flightmaster is Approaching now and must not arm this.
+                if (taxiDetail == "taxi_no_money" || taxiDetail == "taxi_refused")
+                    job.taxiRetryAt = now + sMyBotsConfig.NavTaxiRetrySec();
+                else if (taxiDetail.empty())
+                    job.taxiRetryAt = now + (sMyBotsConfig.NavTaxiRetrySec() > 30u
+                        ? 30u : sMyBotsConfig.NavTaxiRetrySec());
+                break;
+        }
+    }
+
+    // Same-map boat / Teldrassil pink portal under the tree. Taxi may land at
+    // Rut'theran; never pathfind up the trunk when a portal hop exists.
+    {
+        bool const localActive = job.travelLegSet
+            && job.travelDestMap == player->GetMapId()
+            && (job.travelIsPortal || job.travelSawTransport || job.travelRawSet);
+        if (localActive || MyBotsTravel::LocalBoatHelps(player, x, y, z))
+        {
+            std::string td;
+            switch (MyBotsTravel::AdvanceLocalTransfer(player, job, x, y, z, td))
+            {
+                case MyBotsTravelResult::Advancing:
+                    if (td.rfind("transfer_approach", 0) == 0
+                        || td.rfind("transfer_portal", 0) == 0
+                        || td.rfind("transfer_disembark", 0) == 0)
+                    {
+                        if (job.travelLegSet)
+                            IssueMove(player, job, job.travelLegX, job.travelLegY, job.travelLegZ, false);
+                    }
+                    else if (td.rfind("transfer_waiting", 0) == 0
+                        || td.rfind("transfer_aboard", 0) == 0)
+                    {
+                        player->StopMoving();
+                    }
+                    o.result = MyBotsStepResult::Running;
+                    o.detail = td;
+                    return o;
+                case MyBotsTravelResult::Unreachable:
+                    // Portal climbs must not fall through to "walk up the tree".
+                    if (job.travelIsPortal
+                        || std::fabs(z - player->GetPositionZ()) >= 200.f)
+                    {
+                        player->StopMoving();
+                        MyBotsTravel::Reset(job);
+                        o.result = MyBotsStepResult::Failed;
+                        o.detail = td;
+                        return o;
+                    }
+                    MyBotsTravel::Reset(job);
+                    break;
+                case MyBotsTravelResult::Arrived:
+                    MyBotsTravel::Reset(job);
+                    ResetNavState(job);
+                    break;
+            }
+        }
     }
 
     // Near the goal but pathfinding keeps failing / detouring: soft-arrive so
@@ -495,39 +587,15 @@ MyBotsStepOutcome MyBotsExecutor::MoveTo(Player* player, MyBotsJob& job, float x
         return o;
     }
 
-    // Long hops: let a flight path cover the continent instead of the navmesh.
-    if (now >= job.taxiRetryAt && MyBotsNav::ShouldUseTaxi(player, x, y, z))
-    {
-        float bx = 0.f, by = 0.f, bz = 0.f;
-        std::string taxiDetail;
-        switch (MyBotsNav::TryTaxi(player, x, y, z, bx, by, bz, taxiDetail))
-        {
-            case MyBotsTaxiResult::Boarded:
-                job.taxiInProgress = true;
-                job.taxiSawFlight = false;
-                job.taxiBoardedAt = now;
-                job.moveIssuedAt = 0;
-                o.result = MyBotsStepResult::Running;
-                o.detail = taxiDetail;
-                return o;
-            case MyBotsTaxiResult::Approaching:
-                IssueMove(player, job, bx, by, bz, false);
-                o.result = MyBotsStepResult::Running;
-                o.detail = taxiDetail;
-                return o;
-            case MyBotsTaxiResult::Unavailable:
-                job.taxiRetryAt = now + sMyBotsConfig.NavTaxiRetrySec();
-                break;
-        }
-    }
-
     bool const wasInWater = player->isSwimming() || player->IsInWater();
     bool const landDest = !MyBotsNav::IsDeepWaterAt(player, x, y, z);
     if (!IssueMove(player, job, x, y, z, false))
     {
         // No navmesh route: stay put and let the stuck timer escalate to a
         // detour. Issuing a move anyway is what produced straight lines through
-        // walls and floors.
+        // walls and floors. Prefer retrying taxi on the next tick when far.
+        if (MyBotsNav::ShouldUseTaxi(player, x, y, z))
+            job.taxiRetryAt = 0;
         o.result = MyBotsStepResult::Running;
         o.detail = wasInWater && landDest ? "canal_trapped" : "unreachable";
         return o;

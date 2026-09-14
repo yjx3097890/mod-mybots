@@ -122,10 +122,25 @@ struct MyBotsJob
     uint32 travelActionAt = 0;     // last time we issued a travel action (sec)
     uint32 travelStuckSince = 0;   // cross-map progress watchdog (sec)
     uint32 hearthCastAt = 0;       // when we last triggered the hearthstone (sec)
-    float travelLegX = 0.f;        // sub-destination for the current leg (e.g. dock)
+    float travelLegX = 0.f;        // walk target for the current leg (dry dock)
     float travelLegY = 0.f;
     float travelLegZ = 0.f;
     bool travelLegSet = false;
+    // Raw boat/portal node from travelnode (often in water). Dock snap reads this.
+    float travelRawX = 0.f;
+    float travelRawY = 0.f;
+    float travelRawZ = 0.f;
+    bool travelRawSet = false;
+    bool travelDockReady = false;  // pier snap settled (not ship hull / inland hold)
+    uint32 travelDockResolveAt = 0;
+    // Destination-map side of the transfer (exit pier / portal). Used after the
+    // boat lands so we disembark onto dry ground instead of pathing into the river.
+    float travelDestRawX = 0.f;
+    float travelDestRawY = 0.f;
+    float travelDestRawZ = 0.f;
+    bool travelDestRawSet = false;
+    bool travelSawTransport = false; // boarded at least once this transfer leg
+    bool travelIsPortal = false;     // AreaTrigger (e.g. Rut'theran↔Darnassus), not a boat
 };
 
 struct MyBotsPatrol

@@ -36,6 +36,7 @@ public:
     static void CorrectIfUnderground(Player* player);
 
     // True when (x,y,z) sits in a deep water column (Stormwind canals, etc.).
+    // Includes targeting the water *surface* over a deep bed (boat nodes at z≈0).
     static bool IsDeepWaterAt(Player* player, float x, float y, float z);
 
     // When swimming but the logical destination is on land, pick a nearby dry
@@ -43,6 +44,12 @@ public:
     // Returns true and fills outX/Y/Z when an exit point was found.
     static bool TryExitWaterToward(Player* player, float destX, float destY, float destZ,
         float& outX, float& outY, float& outZ);
+
+    // TravelMgr / travelnode ship points sit in the water. Snap to the nearest
+    // dry pier/dock so transfer_approach walks the harbor street, not the canal.
+    // Portals that are already on land only get a Z snap. Returns false if no
+    // dry ground was found nearby (caller may keep the raw point).
+    static bool ResolveBoardingDock(Player* player, float& x, float& y, float& z);
 
     // Side offset used when the straight line keeps failing.
     static bool ComputeDetour(Player* player, float destX, float destY, float destZ, uint32 attempt,

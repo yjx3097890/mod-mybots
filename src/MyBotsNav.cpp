@@ -90,7 +90,9 @@ namespace
     // Deep water column: water surface is well above the ground under (x,y).
     // Stormwind canals report a dry-looking GetMapHeight (canal floor) that is
     // still several metres under the water — accepting those points drops the
-    // bot into the moat.
+    // bot into the moat. Boat travelnode points often use z≈0 on the *surface*
+    // of a deep harbor; that must still count as water so we do not treat the
+    // ship as a land destination (which made TryExitWaterToward climb walls).
     bool PointIsDeepWater(Player* player, float x, float y, float z)
     {
         if (!player)
@@ -103,8 +105,8 @@ namespace
 
         if (ground > INVALID_HEIGHT && (waterOrGround - ground) > 1.8f)
         {
-            // Targeting anywhere below the water surface in a deep column.
-            if (z < waterOrGround - 0.4f)
+            // At or below the water surface in a deep column (includes ship z≈0).
+            if (z <= waterOrGround + 0.5f)
                 return true;
         }
         return false;
@@ -216,6 +218,40 @@ namespace
         return nullptr;
     }
 
+    // Prefer nodes the player has unlocked. GetNearestTaxiNode ignores the mask
+    // and can aim at Darnassus before the character has ever spoken to that FM.
+    uint32 NearestKnownTaxiNode(Player* player, float x, float y, float z, uint32 mapId)
+    {
+        if (!player)
+            return 0;
+
+        uint32 const teamId = player->GetTeamId();
+        uint32 best = 0;
+        float bestDist2 = 1e12f;
+
+        for (uint32 i = 1; i < sTaxiNodesStore.GetNumRows(); ++i)
+        {
+            TaxiNodesEntry const* node = sTaxiNodesStore.LookupEntry(i);
+            if (!node || node->map_id != mapId)
+                continue;
+            if (!node->MountCreatureID[teamId == TEAM_ALLIANCE ? 1 : 0] && node->MountCreatureID[0] != 32981)
+                continue;
+            if (!player->m_taxi.IsTaximaskNodeKnown(i))
+                continue;
+
+            float const dx = node->x - x;
+            float const dy = node->y - y;
+            float const dz = node->z - z;
+            float const d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < bestDist2)
+            {
+                bestDist2 = d2;
+                best = i;
+            }
+        }
+        return best;
+    }
+
     // Board party selfbots standing at this flight master onto the same path.
     uint32 BoardPartyOnTaxi(Player* leader, Creature* flightMaster,
         std::vector<uint32> const& nodes, uint32 cost, float range)
@@ -284,9 +320,16 @@ MyBotsTaxiResult MyBotsNav::TryTaxi(Player* player, float x, float y, float z,
     uint32 const mapId = player->GetMapId();
     uint32 const teamId = player->GetTeamId();
 
-    uint32 const srcNode = sObjectMgr->GetNearestTaxiNode(player->GetPositionX(), player->GetPositionY(),
-        player->GetPositionZ(), mapId, teamId);
-    uint32 const dstNode = sObjectMgr->GetNearestTaxiNode(x, y, z, mapId, teamId);
+    // Prefer unlocked nodes; fall back to raw nearest so approach still works
+    // before the first gossip unlock (caller walks to FM and learns it).
+    uint32 srcNode = NearestKnownTaxiNode(player, player->GetPositionX(), player->GetPositionY(),
+        player->GetPositionZ(), mapId);
+    uint32 dstNode = NearestKnownTaxiNode(player, x, y, z, mapId);
+    if (!srcNode)
+        srcNode = sObjectMgr->GetNearestTaxiNode(player->GetPositionX(), player->GetPositionY(),
+            player->GetPositionZ(), mapId, teamId);
+    if (!dstNode)
+        dstNode = sObjectMgr->GetNearestTaxiNode(x, y, z, mapId, teamId);
     if (!srcNode || !dstNode || srcNode == dstNode)
         return MyBotsTaxiResult::Unavailable;
 
@@ -295,10 +338,10 @@ MyBotsTaxiResult MyBotsNav::TryTaxi(Player* player, float x, float y, float z,
     if (!srcEntry || !dstEntry || srcEntry->map_id != mapId || dstEntry->map_id != mapId)
         return MyBotsTaxiResult::Unavailable;
 
-    // Flying is only worth it when the landing node is much closer to the goal than we are.
+    // Flying is only worth it when the landing node is closer to the goal.
     float const selfToGoal = Dist2d(player->GetPositionX(), player->GetPositionY(), x, y);
     float const nodeToGoal = Dist2d(dstEntry->x, dstEntry->y, x, y);
-    if (nodeToGoal >= selfToGoal * 0.6f)
+    if (nodeToGoal >= selfToGoal * 0.85f && nodeToGoal + 80.f >= selfToGoal)
         return MyBotsTaxiResult::Unavailable;
 
     // Prefer a direct DBC hop; otherwise use playerbots' BFS taxi graph for
@@ -353,8 +396,9 @@ MyBotsTaxiResult MyBotsNav::TryTaxi(Player* player, float x, float y, float z,
         return MyBotsTaxiResult::Unavailable;
     }
 
+    float const boardRange = sMyBotsConfig.NavTaxiBoardDistance();
     float const toBoard = player->GetDistance(srcEntry->x, srcEntry->y, srcEntry->z);
-    if (toBoard > sMyBotsConfig.NavTaxiBoardDistance())
+    if (toBoard > boardRange)
     {
         boardX = srcEntry->x;
         boardY = srcEntry->y;
@@ -366,11 +410,27 @@ MyBotsTaxiResult MyBotsNav::TryTaxi(Player* player, float x, float y, float z,
     // ActivateTaxiPathTo(nullptr) is a script cheat that starts a flight from
     // anywhere near the node coords — that is the "suddenly on a gryphon in
     // the middle of Goldshire" bug. Only board through a real flight master.
-    Creature* flightMaster = FindNearbyFlightMaster(player, sMyBotsConfig.NavTaxiBoardDistance() + 5.f);
+    // Search wider than boardRange: the node marker is often 15–25 yd from the NPC.
+    Creature* flightMaster = FindNearbyFlightMaster(player, boardRange + 25.f);
     if (!flightMaster)
     {
+#ifdef MYBOTS_HAVE_TRAVELMGR
+        if (TravelMgr::FlightMasterInfo const* info = sTravelMgr.GetNearestFlightMasterInfo(player))
+        {
+            boardX = info->pos.GetPositionX();
+            boardY = info->pos.GetPositionY();
+            boardZ = info->pos.GetPositionZ();
+            detail = "taxi_approach";
+            return MyBotsTaxiResult::Approaching;
+        }
+#endif
+        // Stay at the node and keep trying — do NOT return Unavailable (that
+        // arms taxiRetryAt and falls through to walking across the sea).
+        boardX = srcEntry->x;
+        boardY = srcEntry->y;
+        boardZ = srcEntry->z;
         detail = "taxi_no_flightmaster";
-        return MyBotsTaxiResult::Unavailable;
+        return MyBotsTaxiResult::Approaching;
     }
 
     player->GetMotionMaster()->Clear();
@@ -381,7 +441,7 @@ MyBotsTaxiResult MyBotsNav::TryTaxi(Player* player, float x, float y, float z,
     }
 
     uint32 const party = BoardPartyOnTaxi(player, flightMaster, nodes, cost,
-        sMyBotsConfig.NavTaxiBoardDistance() + 20.f);
+        boardRange + 20.f);
 
     LOG_DEBUG("module.mybots", "MyBots: taxi {} -> {} ({} hops) for {} (cost {}, party {})",
         srcNode, dstNode, nodes.size() - 1, player->GetName(), cost, party);
@@ -612,6 +672,10 @@ bool MyBotsNav::TryExitWaterToward(Player* player, float destX, float destY, flo
             // Bank should be near street level, not deep below the swimmer.
             if (ground < pz - 6.f && ground < destZ - 6.f)
                 continue;
+            // City walls / cliffs are not swim exits — climbing them and falling
+            // back into the canal is the Stormwind harbor loop.
+            if (ground > pz + 8.f)
+                continue;
 
             outX = cx;
             outY = cy;
@@ -623,6 +687,154 @@ bool MyBotsNav::TryExitWaterToward(Player* player, float destX, float destY, flo
         }
     }
     return false;
+}
+
+bool MyBotsNav::ResolveBoardingDock(Player* player, float& x, float& y, float& z)
+{
+    if (!player || !player->IsInWorld())
+        return false;
+
+    float const shipX = x;
+    float const shipY = y;
+    float const shipZ = z;
+
+    float waterHint = INVALID_HEIGHT;
+    float bed = INVALID_HEIGHT;
+    waterHint = player->GetMapWaterOrGroundLevel(shipX, shipY, shipZ + 5.f, &bed);
+
+    bool const deepColumn = (waterHint > INVALID_HEIGHT && bed > INVALID_HEIGHT
+        && (waterHint - bed) > 1.8f);
+    bool const looksLikeWaterNode = deepColumn
+        || PointIsDeepWater(player, shipX, shipY, shipZ)
+        || PointIsDeepWater(player, shipX, shipY, shipZ + 1.f);
+
+    // Portals / land nodes: only correct Z. Never Z-snap a ship footprint — the
+    // transport mesh reads as a floor and drops the bot under the hull.
+    if (!looksLikeWaterNode)
+    {
+        float groundHere = player->GetMapHeight(shipX, shipY,
+            (waterHint > INVALID_HEIGHT ? waterHint : player->GetPositionZ()) + 30.f, true, 80.f);
+        if (groundHere <= INVALID_HEIGHT)
+            groundHere = player->GetMapHeight(shipX, shipY, player->GetPositionZ() + 20.f, true, 80.f);
+        if (groundHere > INVALID_HEIGHT && !PointIsDeepWater(player, shipX, shipY, groundHere + 0.3f))
+        {
+            z = groundHere + 0.2f;
+            return true;
+        }
+    }
+
+    float bestScore = -1e30f;
+    float bestX = shipX, bestY = shipY, bestZ = shipZ;
+    bool found = false;
+
+    // Stay off the ship hull (transport WMO). Harbor piers sit ~20–45 yd out.
+    static float const kRadii[] = { 18.f, 22.f, 26.f, 30.f, 36.f, 42.f, 50.f, 60.f };
+    float const px = player->GetPositionX();
+    float const py = player->GetPositionY();
+    float const pz = player->GetPositionZ();
+    float const searchTop = (waterHint > INVALID_HEIGHT ? waterHint : pz) + 30.f;
+    float const pierMinZ = waterHint > INVALID_HEIGHT ? waterHint - 0.2f : -100000.f;
+    float const pierMaxZ = waterHint > INVALID_HEIGHT ? waterHint + 12.f : 100000.f;
+    bool const requireMesh = RequireMeshRoute(player);
+    float const distToShip = Dist2d(px, py, shipX, shipY);
+
+    auto consider = [&](float cx, float cy)
+    {
+        if (Dist2d(cx, cy, shipX, shipY) < 16.f)
+            return; // on / under the boat
+
+        float ground = player->GetMapHeight(cx, cy, searchTop, true, 80.f);
+        if (ground <= INVALID_HEIGHT)
+            return;
+        // Never below the waterline (seabed / hull underside).
+        if (ground < pierMinZ)
+            return;
+        if (ground > pierMaxZ)
+            return;
+        if (PointIsDeepWater(player, cx, cy, ground + 0.3f))
+            return;
+        if (IsBadPoint(player, cx, cy, ground))
+            return;
+
+        // When close enough to pathfind, reject wall-clips and indoor shortcuts.
+        if (distToShip < 120.f || Dist2d(px, py, cx, cy) < 120.f)
+        {
+            PathGenerator gen(player);
+            if (!gen.CalculatePath(cx, cy, ground, /*forceDest=*/false))
+                return;
+            if (!IsCredibleMeshPath(gen, player, cx, cy, requireMesh))
+                return;
+        }
+
+        float const toShip = Dist2d(cx, cy, shipX, shipY);
+        float const toPlayer = Dist2d(cx, cy, px, py);
+        float score = -toShip * 2.f - toPlayer * 0.05f;
+        // Prefer classic pier deck height (~5 yd above SW harbor waterline).
+        if (waterHint > INVALID_HEIGHT && ground >= waterHint + 2.f && ground <= waterHint + 8.f)
+            score += 50.f;
+        else if (waterHint > INVALID_HEIGHT && ground >= waterHint - 0.2f && ground <= waterHint + 12.f)
+            score += 20.f;
+        // Prefer the inland / player-facing side of the ship (the dock, not open sea).
+        float const inX = px - shipX;
+        float const inY = py - shipY;
+        float const len = std::sqrt(inX * inX + inY * inY);
+        if (len > 1.f)
+        {
+            float const sx = (cx - shipX) / (toShip > 0.1f ? toShip : 1.f);
+            float const sy = (cy - shipY) / (toShip > 0.1f ? toShip : 1.f);
+            score += 15.f * (sx * inX + sy * inY) / len;
+        }
+
+        if (!found || score > bestScore)
+        {
+            found = true;
+            bestScore = score;
+            bestX = cx;
+            bestY = cy;
+            bestZ = ground + 0.2f;
+        }
+    };
+
+    for (float radius : kRadii)
+    {
+        int const steps = 24;
+        for (int i = 0; i < steps; ++i)
+        {
+            float const a = (2.f * 3.14159265f) * (float(i) / float(steps));
+            consider(shipX + std::cos(a) * radius, shipY + std::sin(a) * radius);
+        }
+    }
+
+    // Inland holding points along ship→player when the pier tile is not ready.
+    if (!found)
+    {
+        float const dx = px - shipX;
+        float const dy = py - shipY;
+        float const len = std::sqrt(dx * dx + dy * dy);
+        if (len > 20.f)
+        {
+            static float const kBack[] = { 25.f, 40.f, 55.f, 75.f, 100.f };
+            for (float back : kBack)
+            {
+                if (back >= len - 5.f)
+                    continue;
+                consider(shipX + (dx / len) * back, shipY + (dy / len) * back);
+                if (found)
+                    break;
+            }
+        }
+    }
+
+    if (!found)
+        return false;
+
+    LOG_DEBUG("module.mybots",
+        "MyBots: {} boarding dock ({:.1f},{:.1f},{:.1f}) <- ship ({:.1f},{:.1f},{:.1f})",
+        player->GetName(), bestX, bestY, bestZ, shipX, shipY, shipZ);
+    x = bestX;
+    y = bestY;
+    z = bestZ;
+    return true;
 }
 
 bool MyBotsNav::ComputeDetour(Player* player, float destX, float destY, float destZ, uint32 attempt,

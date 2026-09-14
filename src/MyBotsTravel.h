@@ -34,7 +34,17 @@ public:
 
     // Load continent boat/portal edges from playerbots_travelnode(+_link)
     // without pulling the 1.4M walk-path rows or writing TravelMgr. Idempotent.
+    // Includes same-map boats (e.g. Moonspray Darkshore↔Teldrassil).
     static void EnsureTransfersLoaded();
+
+    // True when a same-map boat/portal hop is a better first step than walking
+    // (Auberdine → Darnassus via Moonspray, or Rut'theran → Darnassus tree portal).
+    static bool LocalBoatHelps(Player* player, float x, float y, float z);
+
+    // Same-map boat / portal state machine (Moonspray, Teldrassil pink portal).
+    // Call from MoveTo after taxi; never climb the tree when a portal exists.
+    static MyBotsTravelResult AdvanceLocalTransfer(Player* player, MyBotsJob& job,
+        float x, float y, float z, std::string& detail);
 
     // Clear cross-map bookkeeping once a leg finishes or the job resets.
     static void Reset(MyBotsJob& job);

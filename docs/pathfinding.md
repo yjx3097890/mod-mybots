@@ -12,6 +12,7 @@
 |---|---|---|
 | **同一张地图** | 用 **navmesh（导航网格）** 绕障碍贴地走 | 不接受「穿山穿墙的直线」当合法路 |
 | **同图很远** | 先找 **taxi（飞行点）** 登机，落地后再走网格 | 不假装飞到空中（必须靠近真正的飞行管理员） |
+| **同图隔海 / 爬树** | 船（如 Moonspray）或 **树下粉门**（Rut'theran↔达纳苏斯） | **绝不沿树干爬上去**；有门就走 `transfer_portal` |
 | **另一张地图** | 规则：炉石 → 船/飞艇/传送门 → 否则失败 | **绝不在错误地图上朝目标坐标直线冲** |
 
 早期看到的「直来直去、穿模、橡皮筋」，多半不是「没开寻路」，而是：跨图目标却在本图乱走，或引擎给出了假路径（直线）却被当成真路径执行了。
@@ -128,8 +129,12 @@ playerbots_travelnode（船/门）+ TravelMgr（坏格子、多跳飞行图）
 | **TravelMgr** | playerbots 旅行管理器：任务点、坏 mmap、跨图边等。 |
 | **mapTransfer** | 一张「从 A 图某点 → B 图某点」的交通边（船、飞艇、区域触发传送门等）。 |
 | **continent transfers** | 启动时从 `playerbots_travelnode` + `_link` 只读 **type 2/3（门/船）**、地图 `0/1/530/571` 的边；按阵营过滤飞艇/联盟船。不灌 walk path。 |
-| **transfer_approach** | 正在 **本图** 用 navmesh 走到码头/门口。 |
+| **transfer_approach** | 走向出发码头。上船后改为 `transfer_aboard`，**禁止再 MovePoint**（否则船一开就会在船里往回走）。 |
+| **transfer_portal** | 同图走入 AreaTrigger（如泰达希尔树下粉门）。到点后继续朝触发体积挪，靠坐标突变判断到达，**不是** `GetTransport()`。 |
+| **transfer_aboard** | 已在船/飞艇上，停步等换图或到岸。 |
+| **transfer_disembark** | 到目标图后走到干码头，再继续同图任务。 |
 | **transfer_waiting** | 已到点，等船/触发器把人换到另一张图。 |
+| **AdvanceLocalTransfer** | 同图船/门状态机：坐鸟落地后若 Z 落差大（达纳苏斯），优先树下粉门。 |
 | **cross_map_unreachable** | 炉石和 transfer 都用不上 → **安全失败**，原地停，不乱走。 |
 | **travel_to** | 作业/LLM 操作：带 `map` 的跨图移动意图（可带 xyz 或 NPC entry）。 |
 | **MAP_UNSPECIFIED** | 「payload 没写 map」。注意：**东部王国是 map `0`，`0` 是合法目标图**，不能当成「没指定」。 |
@@ -141,9 +146,10 @@ playerbots_travelnode（船/门）+ TravelMgr（坏格子、多跳飞行图）
 | `moving` | 同图正在走 |
 | `arrived` | 到了 |
 | `unreachable` / `stuck` | 同图走不通或卡死超限 |
-| `taxi_approach` / `taxi_boarded` / `taxi_boarded_multi` | 走向飞行点 / 已登机 / 多跳登机 |
+| `taxi_approach` / `taxi_boarded` / `taxi_boarded_multi` / `taxi_no_flightmaster` | 走向飞行点 / 已登机 / 多跳登机 / 在节点等飞行管理员（不会因此改去走路穿海） |
 | `hearth_cast` / `hearth_pending` | 正在炉石 / 等炉石完成 |
-| `transfer_approach` / `transfer_approach;via=` / `transfer_waiting` | 走向交通点（via 为船/门名） / 等换图 |
+| `transfer_approach` / `transfer_approach;via=` / `transfer_portal` / `transfer_waiting` / `transfer_aboard` / `transfer_disembark` | 走向码头 / 树下粉门 / 等船 / 已在船上别乱动 / 到岸后走到干码头 |
+| `local_portal_arrived` / `local_boat_arrived` | 同图门/船腿完成，继续朝任务点走 |
 | `cross_map_unreachable;from=;to=;hearth=;transfers=` | 跨图无可用规则（当前图/目标图/炉石图/本阵营可用边数） |
 | `cross_map_combat` | 跨图时先在打架，暂缓 |
 
@@ -156,7 +162,8 @@ playerbots_travelnode（船/门）+ TravelMgr（坏格子、多跳飞行图）
 1. **作业**给出目标 `(x,y,z)`（可选 `dist` 到达半径）。
 2. **MoveTo** 发现「当前 map == 目标 map」（或未指定 map）→ 走同图分支。
 3. （可选）距离够远且配置开了 taxi → **TryTaxi**：走近 FlightMaster → 登机 → 落地后再走。
-4. **IssueMove**：
+4. （可选）同图船/门：`LocalBoatHelps` → **AdvanceLocalTransfer**。达纳苏斯目标且已在鲁瑟兰附近时走 **树下粉门**（`transfer_portal`），不爬树。
+5. **IssueMove**：
    - 若已在朝同一目标走，且未到重算间隔 → **不再** `Clear`/`MovePoint`（减少橡皮筋）。
    - 偶尔检查是否掉穿地并抬回。
    - 调用 **PrepareWalkTarget**：
@@ -164,7 +171,7 @@ playerbots_travelnode（船/门）+ TravelMgr（坏格子、多跳飞行图）
      - 用 **PathGenerator** 试算；只接受 **可信网格路径**。
      - 太远则 **ApproachWaypoint** 先走中间可达点。
    - 成功则 **MovePoint(..., generatePath=true)**：引擎沿 navmesh 生成折线并驱动移动。
-5. 每 tick 看距离是否 ≤ `dist` → `arrived`；卡住则 detour / 记坏点 / 失败。
+6. 每 tick 看距离是否 ≤ `dist` → `arrived`；卡住则 detour / 记坏点 / 失败。
 
 ```
 请求目标 B
